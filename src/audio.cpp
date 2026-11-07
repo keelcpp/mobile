@@ -2,7 +2,22 @@
 #include "keel/algo.h"
 
 #include <cmath>
+#include <mutex>
 #include <numbers>
+
+#if defined(__ANDROID__)
+#include <aaudio/AAudio.h>
+#include <android/log.h>
+#elif defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <mmsystem.h>
+#endif
 
 namespace keel {
 
@@ -62,6 +77,43 @@ void radix2_fft(ComplexF32* a, usize n) noexcept {
 
 } // namespace
 
+struct AudioCapture::NativeAudioState {
+#if defined(__ANDROID__)
+    AAudioStream* stream = nullptr;
+    std::mutex mutex;
+    Array<f32> staging;
+
+    static aaudio_data_callback_result_t on_audio_ready(
+        AAudioStream* /*stream*/,
+        void* user_data,
+        void* audio_data,
+        int32_t num_frames
+    ) {
+        auto* self = static_cast<NativeAudioState*>(user_data);
+        if (!self || !audio_data || num_frames <= 0) {
+            return AAUDIO_CALLBACK_RESULT_CONTINUE;
+        }
+        const auto* samples = static_cast<const f32*>(audio_data);
+        const usize count = static_cast<usize>(num_frames);
+        std::lock_guard<std::mutex> lock(self->mutex);
+        if (self->staging.size() + count > AudioCapture::kWaveformWindowSamples * 2) {
+            self->staging.clear();
+        }
+        const usize old_sz = self->staging.size();
+        self->staging.resize(old_sz + count);
+        mem_copy(self->staging.data() + old_sz, samples, count * sizeof(f32));
+        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    }
+#elif defined(_WIN32)
+    static constexpr usize kNumBuffers = 4;
+    static constexpr usize kBufferSamples = 1024;
+    HWAVEIN wave_in = nullptr;
+    WAVEHDR headers[kNumBuffers]{};
+    i16 pcm_buffers[kNumBuffers][kBufferSamples]{};
+    bool headers_prepared[kNumBuffers]{};
+#endif
+};
+
 AudioCapture::AudioCapture() {
     m_waveform.resize(kWaveformWindowSamples, 0.0f);
     m_spectrum_db.resize(kSpectrumBins, -95.0f);
@@ -69,6 +121,161 @@ AudioCapture::AudioCapture() {
 
 AudioCapture::~AudioCapture() {
     shutdown();
+}
+
+bool AudioCapture::open_hardware_stream() {
+    close_hardware_stream();
+    m_native = new NativeAudioState();
+
+#if defined(__ANDROID__)
+    AAudioStreamBuilder* builder = nullptr;
+    if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK || !builder) {
+        close_hardware_stream();
+        return false;
+    }
+
+    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_INPUT);
+    AAudioStreamBuilder_setSampleRate(builder, static_cast<int32_t>(m_sample_rate));
+    AAudioStreamBuilder_setChannelCount(builder, 1);
+    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+    AAudioStreamBuilder_setDataCallback(builder, &NativeAudioState::on_audio_ready, m_native);
+
+    const aaudio_result_t open_res = AAudioStreamBuilder_openStream(builder, &m_native->stream);
+    AAudioStreamBuilder_delete(builder);
+
+    if (open_res != AAUDIO_OK || !m_native->stream) {
+        close_hardware_stream();
+        return false;
+    }
+
+    const int32_t actual_rate = AAudioStream_getSampleRate(m_native->stream);
+    if (actual_rate > 0) {
+        m_sample_rate = static_cast<u32>(actual_rate);
+    }
+
+    if (AAudioStream_requestStart(m_native->stream) != AAUDIO_OK) {
+        close_hardware_stream();
+        return false;
+    }
+    return true;
+#elif defined(_WIN32)
+    if (waveInGetNumDevs() == 0) {
+        close_hardware_stream();
+        return false;
+    }
+
+    WAVEFORMATEX wfx{};
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = 1;
+    wfx.nSamplesPerSec = m_sample_rate;
+    wfx.wBitsPerSample = 16;
+    wfx.nBlockAlign = static_cast<WORD>(wfx.nChannels * (wfx.wBitsPerSample / 8));
+    wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+
+    if (waveInOpen(&m_native->wave_in, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR ||
+        !m_native->wave_in) {
+        close_hardware_stream();
+        return false;
+    }
+
+    for (usize i = 0; i < NativeAudioState::kNumBuffers; ++i) {
+        auto& hdr = m_native->headers[i];
+        hdr = WAVEHDR{};
+        hdr.lpData = reinterpret_cast<LPSTR>(m_native->pcm_buffers[i]);
+        hdr.dwBufferLength = static_cast<DWORD>(NativeAudioState::kBufferSamples * sizeof(i16));
+        if (waveInPrepareHeader(m_native->wave_in, &hdr, sizeof(WAVEHDR)) == MMSYSERR_NOERROR) {
+            m_native->headers_prepared[i] = true;
+            waveInAddBuffer(m_native->wave_in, &hdr, sizeof(WAVEHDR));
+        }
+    }
+
+    if (waveInStart(m_native->wave_in) != MMSYSERR_NOERROR) {
+        close_hardware_stream();
+        return false;
+    }
+    return true;
+#else
+    close_hardware_stream();
+    return false;
+#endif
+}
+
+void AudioCapture::close_hardware_stream() {
+    if (!m_native) return;
+
+#if defined(__ANDROID__)
+    if (m_native->stream) {
+        AAudioStream_requestStop(m_native->stream);
+        AAudioStream_close(m_native->stream);
+        m_native->stream = nullptr;
+    }
+#elif defined(_WIN32)
+    if (m_native->wave_in) {
+        waveInReset(m_native->wave_in);
+        for (usize i = 0; i < NativeAudioState::kNumBuffers; ++i) {
+            if (m_native->headers_prepared[i]) {
+                waveInUnprepareHeader(m_native->wave_in, &m_native->headers[i], sizeof(WAVEHDR));
+                m_native->headers_prepared[i] = false;
+            }
+        }
+        waveInClose(m_native->wave_in);
+        m_native->wave_in = nullptr;
+    }
+#endif
+
+    delete m_native;
+    m_native = nullptr;
+}
+
+bool AudioCapture::poll_hardware_stream() {
+    if (!m_native || m_force_synthetic) return false;
+
+#if defined(__ANDROID__)
+    Array<f32> captured;
+    {
+        std::lock_guard<std::mutex> lock(m_native->mutex);
+        if (!m_native->staging.empty()) {
+            captured = std::move(m_native->staging);
+            m_native->staging.clear();
+        }
+    }
+    if (!captured.empty()) {
+        push_hardware_samples(captured);
+        return true;
+    }
+    return false;
+#elif defined(_WIN32)
+    if (!m_native->wave_in) return false;
+
+    bool got_any = false;
+    f32 conv_buf[NativeAudioState::kBufferSamples]{};
+    constexpr f32 kScale = 1.0f / 32768.0f;
+
+    for (usize i = 0; i < NativeAudioState::kNumBuffers; ++i) {
+        auto& hdr = m_native->headers[i];
+        if ((hdr.dwFlags & WHDR_DONE) != 0) {
+            const usize samples_read = keel::min<usize>(
+                hdr.dwBytesRecorded / sizeof(i16),
+                NativeAudioState::kBufferSamples
+            );
+            if (samples_read > 0) {
+                const i16* src = m_native->pcm_buffers[i];
+                for (usize s = 0; s < samples_read; ++s) {
+                    conv_buf[s] = static_cast<f32>(src[s]) * kScale;
+                }
+                push_hardware_samples(ArrayRef<f32>(conv_buf, samples_read));
+                got_any = true;
+            }
+            hdr.dwBytesRecorded = 0;
+            waveInAddBuffer(m_native->wave_in, &hdr, sizeof(WAVEHDR));
+        }
+    }
+    return got_any;
+#else
+    return false;
+#endif
 }
 
 bool AudioCapture::initialize(u32 sample_rate) {
@@ -80,20 +287,43 @@ bool AudioCapture::initialize(u32 sample_rate) {
     m_spectrum_db.clear();
     m_spectrum_db.resize(kSpectrumBins, -95.0f);
 
+    if (!m_force_synthetic && open_hardware_stream()) {
+        m_using_synthetic = false;
+    } else {
+        m_using_synthetic = true;
+    }
+
     m_initialized = true;
     m_capturing = true;
-    m_using_synthetic = true;
     update_frame(0.016);
     return true;
 }
 
 void AudioCapture::shutdown() {
+    close_hardware_stream();
     m_initialized = false;
     m_capturing = false;
 }
 
 bool AudioCapture::set_capturing(bool enabled) {
     m_capturing = enabled;
+#if defined(__ANDROID__)
+    if (m_native && m_native->stream) {
+        if (enabled) {
+            AAudioStream_requestStart(m_native->stream);
+        } else {
+            AAudioStream_requestPause(m_native->stream);
+        }
+    }
+#elif defined(_WIN32)
+    if (m_native && m_native->wave_in) {
+        if (enabled) {
+            waveInStart(m_native->wave_in);
+        } else {
+            waveInStop(m_native->wave_in);
+        }
+    }
+#endif
     return true;
 }
 
@@ -124,6 +354,10 @@ void AudioCapture::update_frame(f64 dt_seconds) {
     if (!m_capturing) return;
 
     m_sim_time_sec += dt_seconds;
+
+    if (!m_got_external_samples_this_frame) {
+        poll_hardware_stream();
+    }
 
     if (!m_got_external_samples_this_frame && (m_using_synthetic || m_force_synthetic)) {
         m_using_synthetic = true;

@@ -10,6 +10,14 @@
 #include <sys/system_properties.h>
 #define KEEL_SYS_LOGI(...) __android_log_print(ANDROID_LOG_INFO, "keel::System", __VA_ARGS__)
 #define KEEL_SYS_LOGW(...) __android_log_print(ANDROID_LOG_WARN, "keel::System", __VA_ARGS__)
+#elif defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 namespace keel {
@@ -36,6 +44,8 @@ bool SystemBridge::initialize(void* jni_env, void* android_activity) {
     for (usize i = 0; i < kPermissionCount; ++i) {
         m_permissions[i] = PermissionStatus::Granted;
     }
+    refresh_android_permissions();
+    poll_battery_status();
 
     m_initialized = true;
     return true;
@@ -84,6 +94,96 @@ void SystemBridge::query_android_device_info() {
 #endif
 }
 
+void SystemBridge::poll_battery_status() {
+#if defined(__ANDROID__)
+    if (m_jni_env && m_android_activity) {
+        auto* env = static_cast<JNIEnv*>(m_jni_env);
+        auto activity = static_cast<jobject>(m_android_activity);
+        jclass activity_cls = env->GetObjectClass(activity);
+        if (activity_cls) {
+            jmethodID get_service = env->GetMethodID(
+                activity_cls, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+            if (get_service) {
+                jstring bm_name = env->NewStringUTF("batterymanager");
+                jobject bm_obj = env->CallObjectMethod(activity, get_service, bm_name);
+                env->DeleteLocalRef(bm_name);
+                if (!env->ExceptionCheck() && bm_obj) {
+                    jclass bm_cls = env->GetObjectClass(bm_obj);
+                    if (bm_cls) {
+                        jmethodID get_int_prop = env->GetMethodID(bm_cls, "getIntProperty", "(I)I");
+                        if (get_int_prop) {
+                            // BATTERY_PROPERTY_CAPACITY = 4
+                            const jint cap = env->CallIntMethod(bm_obj, get_int_prop, 4);
+                            if (!env->ExceptionCheck() && cap >= 0 && cap <= 100) {
+                                m_battery.level_pct = static_cast<f32>(cap);
+                            }
+                        }
+                        jmethodID is_charging = env->GetMethodID(bm_cls, "isCharging", "()Z");
+                        if (is_charging) {
+                            m_battery.is_charging = (env->CallBooleanMethod(bm_obj, is_charging) == JNI_TRUE);
+                        }
+                        env->DeleteLocalRef(bm_cls);
+                    }
+                    env->DeleteLocalRef(bm_obj);
+                }
+            }
+            env->DeleteLocalRef(activity_cls);
+        }
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+    }
+#elif defined(_WIN32)
+    SYSTEM_POWER_STATUS sps{};
+    if (GetSystemPowerStatus(&sps)) {
+        if (sps.BatteryLifePercent <= 100) {
+            m_battery.level_pct = static_cast<f32>(sps.BatteryLifePercent);
+        } else {
+            m_battery.level_pct = 86.0f;
+        }
+        m_battery.is_charging = (sps.ACLineStatus == 1) || ((sps.BatteryFlag & 8) != 0);
+    } else {
+        m_battery.level_pct = 86.0f;
+    }
+#else
+    m_battery.level_pct = 86.0f;
+#endif
+
+    if (m_device_info.is_simulator) {
+        m_battery.temperature_c = 29.0f + 1.5f * std::sin(static_cast<f32>(m_haptic_count) * 0.2f);
+    }
+}
+
+void SystemBridge::refresh_android_permissions() {
+#if defined(__ANDROID__)
+    if (!m_jni_env || !m_android_activity) return;
+    auto* env = static_cast<JNIEnv*>(m_jni_env);
+    auto activity = static_cast<jobject>(m_android_activity);
+    jclass activity_cls = env->GetObjectClass(activity);
+    if (!activity_cls) return;
+
+    jmethodID check_self = env->GetMethodID(activity_cls, "checkSelfPermission", "(Ljava/lang/String;)I");
+    if (check_self) {
+        for (usize i = 0; i < kPermissionCount; ++i) {
+            const auto perm = static_cast<Permission>(i);
+            const char* perm_str = android_permission_string(perm);
+            if (!perm_str || perm_str[0] == '\0') continue;
+
+            jstring jperm = env->NewStringUTF(perm_str);
+            const jint res = env->CallIntMethod(activity, check_self, jperm);
+            env->DeleteLocalRef(jperm);
+            if (!env->ExceptionCheck()) {
+                // PackageManager.PERMISSION_GRANTED == 0
+                m_permissions[i] = (res == 0) ? PermissionStatus::Granted : PermissionStatus::Denied;
+            } else {
+                env->ExceptionClear();
+            }
+        }
+    }
+    env->DeleteLocalRef(activity_cls);
+#endif
+}
+
 void SystemBridge::apply_simulated_cutout_if_needed() noexcept {
     if (m_simulate_cutout) {
         if (m_screen_orientation == ScreenOrientation::Portrait ||
@@ -104,13 +204,11 @@ void SystemBridge::set_simulate_mobile_cutout(bool enabled) noexcept {
 
 void SystemBridge::update_frame(f64 dt_seconds) {
     m_poll_timer_sec += dt_seconds;
-    if (m_poll_timer_sec < 1.0) return;
+    if (m_poll_timer_sec < 1.5) return;
     m_poll_timer_sec = 0.0;
 
-    // Gentle battery temperature drift in simulator
-    if (m_device_info.is_simulator) {
-        m_battery.temperature_c = 29.0f + 1.5f * std::sin(static_cast<f32>(m_haptic_count) * 0.2f);
-    }
+    refresh_android_permissions();
+    poll_battery_status();
 }
 
 PermissionStatus SystemBridge::permission_status(Permission perm) const noexcept {
@@ -158,6 +256,41 @@ void SystemBridge::request_permission(Permission perm, PermissionCallback callba
         if (callback) callback(perm, PermissionStatus::Denied);
         return;
     }
+
+#if defined(__ANDROID__)
+    if (m_jni_env && m_android_activity) {
+        auto* env = static_cast<JNIEnv*>(m_jni_env);
+        auto activity = static_cast<jobject>(m_android_activity);
+        jclass activity_cls = env->GetObjectClass(activity);
+        if (activity_cls) {
+            const char* perm_str = android_permission_string(perm);
+            jmethodID check_self = env->GetMethodID(activity_cls, "checkSelfPermission", "(Ljava/lang/String;)I");
+            jstring jperm = env->NewStringUTF(perm_str);
+            if (check_self && env->CallIntMethod(activity, check_self, jperm) == 0) {
+                env->DeleteLocalRef(jperm);
+                env->DeleteLocalRef(activity_cls);
+                m_permissions[idx] = PermissionStatus::Granted;
+                if (callback) callback(perm, PermissionStatus::Granted);
+                return;
+            }
+            if (env->ExceptionCheck()) env->ExceptionClear();
+
+            jmethodID req_perms = env->GetMethodID(activity_cls, "requestPermissions", "([Ljava/lang/String;I)V");
+            jclass str_cls = env->FindClass("java/lang/String");
+            if (req_perms && str_cls) {
+                jobjectArray arr = env->NewObjectArray(1, str_cls, jperm);
+                if (arr) {
+                    env->CallVoidMethod(activity, req_perms, arr, static_cast<jint>(100 + idx));
+                    env->DeleteLocalRef(arr);
+                }
+            }
+            if (str_cls) env->DeleteLocalRef(str_cls);
+            env->DeleteLocalRef(jperm);
+            env->DeleteLocalRef(activity_cls);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+    }
+#endif
 
     m_permissions[idx] = PermissionStatus::Granted;
     if (callback) {
@@ -215,6 +348,42 @@ void SystemBridge::vibrate_ms(u32 duration_ms) {
             env->ExceptionClear();
         }
     }
+#endif
+}
+
+void SystemBridge::show_native_toast(StringRef message, bool long_duration) {
+#if defined(__ANDROID__)
+    if (m_jni_env && m_android_activity && !message.empty()) {
+        auto* env = static_cast<JNIEnv*>(m_jni_env);
+        auto activity = static_cast<jobject>(m_android_activity);
+        jclass toast_cls = env->FindClass("android/widget/Toast");
+        if (toast_cls) {
+            jmethodID make_text = env->GetStaticMethodID(
+                toast_cls,
+                "makeText",
+                "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;"
+            );
+            jmethodID show_method = env->GetMethodID(toast_cls, "show", "()V");
+            if (make_text && show_method) {
+                InplaceString<256> msg_buf(message);
+                jstring jmsg = env->NewStringUTF(msg_buf.c_str());
+                jobject toast_obj = env->CallStaticObjectMethod(
+                    toast_cls, make_text, activity, jmsg, static_cast<jint>(long_duration ? 1 : 0));
+                env->DeleteLocalRef(jmsg);
+                if (!env->ExceptionCheck() && toast_obj) {
+                    env->CallVoidMethod(toast_obj, show_method);
+                    env->DeleteLocalRef(toast_obj);
+                }
+            }
+            env->DeleteLocalRef(toast_cls);
+        }
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+    }
+#else
+    (void)message;
+    (void)long_duration;
 #endif
 }
 

@@ -6,10 +6,11 @@
 namespace keel {
 
 // System-level bridge for Mobile OS features:
-// - Runtime Permissions
+// - Runtime Permissions (Android Activity.checkSelfPermission / requestPermissions JNI + Simulator)
 // - Haptic Feedback & Vibration (Android JNI Vibrator + Simulator)
 // - Display Safe Area Insets & Screen Orientation
-// - Battery & Power telemetry
+// - Battery & Power telemetry (Android JNI BatteryManager + Windows GetSystemPowerStatus + Simulator)
+// - Native OS Toast notifications (Android JNI android.widget.Toast)
 class SystemBridge {
 public:
     static constexpr usize kPermissionCount = static_cast<usize>(Permission::Count);
@@ -61,8 +62,13 @@ public:
     [[nodiscard]] const BatteryStatus& battery_status() const noexcept { return m_battery; }
     void set_battery_status(const BatteryStatus& status) noexcept { m_battery = status; }
 
+    // Native OS Toast
+    void show_native_toast(StringRef message, bool long_duration = false);
+
 private:
     void query_android_device_info();
+    void poll_battery_status();
+    void refresh_android_permissions();
     void apply_simulated_cutout_if_needed() noexcept;
 
     void* m_jni_env = nullptr;

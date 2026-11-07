@@ -6,6 +6,10 @@
 namespace keel {
 
 // Real-time Microphone PCM Audio Capture and Spectral Analyzer (1024-point Hann FFT).
+// Native hardware backends:
+// - Android: NDK AAudio (<aaudio/AAudio.h>) low-latency microphone stream
+// - Windows: WinMM waveIn PCM capture
+// - Fallback / Simulator: Calibrated multi-harmonic + white-noise synthesizer
 class AudioCapture {
 public:
     static constexpr u32 kDefaultSampleRate = 48000;
@@ -53,7 +57,13 @@ public:
     [[nodiscard]] f32 synth_noise_floor_db() const noexcept { return m_synth_noise_db; }
 
 private:
+    bool open_hardware_stream();
+    void close_hardware_stream();
+    bool poll_hardware_stream();
     void compute_metrics_and_spectrum();
+
+    struct NativeAudioState;
+    NativeAudioState* m_native = nullptr;
 
     u32 m_sample_rate = kDefaultSampleRate;
     Array<f32> m_waveform{};

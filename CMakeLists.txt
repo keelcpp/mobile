@@ -42,12 +42,16 @@ if( ANDROID )
     find_library(ANDROID_LOG_LIB log REQUIRED)
     find_library(ANDROID_CAMERA2NDK_LIB camera2ndk REQUIRED)
     find_library(ANDROID_MEDIANDK_LIB mediandk REQUIRED)
+    find_library(ANDROID_AAUDIO_LIB aaudio REQUIRED)
     target_link_libraries(keel_mobile PUBLIC
         ${ANDROID_LIB}
         ${ANDROID_LOG_LIB}
         ${ANDROID_CAMERA2NDK_LIB}
         ${ANDROID_MEDIANDK_LIB}
+        ${ANDROID_AAUDIO_LIB}
     )
+elseif( WIN32 )
+    target_link_libraries(keel_mobile PUBLIC winmm)
 endif()
 
 if( MSVC )
