@@ -1,9 +1,8 @@
 #include "keel/mobile/audio.h"
 #include "keel/algo.h"
 
-#include <cmath>
-#include <mutex>
-#include <numbers>
+#include "keel/math.h"
+#include "keel/sync.h"
 
 #if defined(__ANDROID__)
 #include <aaudio/AAudio.h>
@@ -40,7 +39,7 @@ struct ComplexF32 {
     }
 
     [[nodiscard]] f32 abs() const noexcept {
-        return std::sqrt(re * re + im * im);
+        return keel::sqrt(re * re + im * im);
     }
 };
 
@@ -60,8 +59,8 @@ void radix2_fft(ComplexF32* a, usize n) noexcept {
     }
 
     for (usize len = 2; len <= n; len <<= 1) {
-        const f32 angle = -2.0f * std::numbers::pi_v<f32> / static_cast<f32>(len);
-        const ComplexF32 wlen{std::cos(angle), std::sin(angle)};
+        const f32 angle = -2.0f * keel::as<f32>(keel::kPi) / static_cast<f32>(len);
+        const ComplexF32 wlen{keel::cos(angle), keel::sin(angle)};
         for (usize i = 0; i < n; i += len) {
             ComplexF32 w{1.0f, 0.0f};
             for (usize j = 0; j < len / 2; ++j) {
@@ -80,14 +79,14 @@ void radix2_fft(ComplexF32* a, usize n) noexcept {
 struct AudioCapture::NativeAudioState {
 #if defined(__ANDROID__)
     AAudioStream* stream = nullptr;
-    std::mutex mutex;
+    keel::Mutex mutex;
     Array<f32> staging;
 
     static aaudio_data_callback_result_t on_audio_ready(
         AAudioStream* /*stream*/,
         void* user_data,
         void* audio_data,
-        int32_t num_frames
+        i32 num_frames
     ) {
         auto* self = static_cast<NativeAudioState*>(user_data);
         if (!self || !audio_data || num_frames <= 0) {
@@ -95,7 +94,7 @@ struct AudioCapture::NativeAudioState {
         }
         const auto* samples = static_cast<const f32*>(audio_data);
         const usize count = static_cast<usize>(num_frames);
-        std::lock_guard<std::mutex> lock(self->mutex);
+        keel::LockGuard<keel::Mutex> lock(self->mutex);
         if (self->staging.size() + count > AudioCapture::kWaveformWindowSamples * 2) {
             self->staging.clear();
         }
@@ -135,7 +134,7 @@ bool AudioCapture::open_hardware_stream() {
     }
 
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_INPUT);
-    AAudioStreamBuilder_setSampleRate(builder, static_cast<int32_t>(m_sample_rate));
+    AAudioStreamBuilder_setSampleRate(builder, static_cast<i32>(m_sample_rate));
     AAudioStreamBuilder_setChannelCount(builder, 1);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
     AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
@@ -150,7 +149,7 @@ bool AudioCapture::open_hardware_stream() {
         return false;
     }
 
-    const int32_t actual_rate = AAudioStream_getSampleRate(m_native->stream);
+    const i32 actual_rate = AAudioStream_getSampleRate(m_native->stream);
     if (actual_rate > 0) {
         m_sample_rate = static_cast<u32>(actual_rate);
     }
@@ -235,9 +234,9 @@ bool AudioCapture::poll_hardware_stream() {
 #if defined(__ANDROID__)
     Array<f32> captured;
     {
-        std::lock_guard<std::mutex> lock(m_native->mutex);
+        keel::LockGuard<keel::Mutex> lock(m_native->mutex);
         if (!m_native->staging.empty()) {
-            captured = std::move(m_native->staging);
+            captured = keel::move(m_native->staging);
             m_native->staging.clear();
         }
     }
@@ -362,27 +361,27 @@ void AudioCapture::update_frame(f64 dt_seconds) {
     if (!m_got_external_samples_this_frame && (m_using_synthetic || m_force_synthetic)) {
         m_using_synthetic = true;
         const usize new_samples = keel::clamp<usize>(
-            static_cast<usize>(std::round(dt_seconds * m_sample_rate)),
+            static_cast<usize>(keel::round(dt_seconds * m_sample_rate)),
             128,
             1024
         );
         const usize keep = m_waveform.size() - new_samples;
         mem_move(m_waveform.data(), m_waveform.data() + new_samples, keep * sizeof(f32));
 
-        const f64 two_pi = 2.0 * std::numbers::pi;
+        const f64 two_pi = 2.0 * keel::kPi;
         const f64 f0 = keel::clamp(static_cast<f64>(m_synth_freq_hz), 60.0, 18000.0);
         const f64 phase_step = two_pi * f0 / static_cast<f64>(m_sample_rate);
-        const f32 noise_amp = std::pow(10.0f, m_synth_noise_db / 20.0f);
-        const f32 am_mod = 0.65f + 0.25f * std::sin(static_cast<f32>(m_sim_time_sec * 2.2));
+        const f32 noise_amp = keel::pow(10.0f, m_synth_noise_db / 20.0f);
+        const f32 am_mod = 0.65f + 0.25f * keel::sin(static_cast<f32>(m_sim_time_sec * 2.2));
 
         u32 rng = static_cast<u32>(m_slice_sequence * 1664525u + 1013904223u);
         for (usize i = keep; i < m_waveform.size(); ++i) {
             rng = rng * 1664525u + 1013904223u;
             const f32 white = (static_cast<f32>(rng & 0xFFFFu) / 32768.0f) - 1.0f;
 
-            const f32 s1 = 0.48f * am_mod * static_cast<f32>(std::sin(m_synth_phase));
-            const f32 s2 = 0.14f * static_cast<f32>(std::sin(m_synth_phase * 2.0));
-            const f32 s3 = 0.06f * static_cast<f32>(std::sin(m_synth_phase * 3.0));
+            const f32 s1 = 0.48f * am_mod * static_cast<f32>(keel::sin(m_synth_phase));
+            const f32 s2 = 0.14f * static_cast<f32>(keel::sin(m_synth_phase * 2.0));
+            const f32 s3 = 0.06f * static_cast<f32>(keel::sin(m_synth_phase * 3.0));
             m_waveform[i] = keel::clamp(s1 + s2 + s3 + white * noise_amp, -1.0f, 1.0f);
 
             m_synth_phase += phase_step;
@@ -407,15 +406,15 @@ void AudioCapture::compute_metrics_and_spectrum() {
     for (usize i = 0; i < kFftSize; ++i) {
         const f32 s = window_start[i];
         sum_sq += static_cast<f64>(s) * s;
-        peak = keel::max(peak, std::abs(s));
+        peak = keel::max(peak, keel::abs(s));
 
-        const f32 w = 0.5f * (1.0f - std::cos(2.0f * std::numbers::pi_v<f32> * static_cast<f32>(i) / static_cast<f32>(kFftSize - 1)));
+        const f32 w = 0.5f * (1.0f - keel::cos(2.0f * keel::as<f32>(keel::kPi) * static_cast<f32>(i) / static_cast<f32>(kFftSize - 1)));
         fft_buf[i] = {s * w, 0.0f};
     }
 
-    const f32 rms = static_cast<f32>(std::sqrt(sum_sq / static_cast<f64>(kFftSize)));
-    m_rms_dbfs = keel::clamp(20.0f * std::log10(keel::max(rms, 1e-5f)), -60.0f, 0.0f);
-    m_peak_dbfs = keel::clamp(20.0f * std::log10(keel::max(peak, 1e-5f)), -60.0f, 0.0f);
+    const f32 rms = static_cast<f32>(keel::sqrt(sum_sq / static_cast<f64>(kFftSize)));
+    m_rms_dbfs = keel::clamp(20.0f * keel::log10(keel::max(rms, 1e-5f)), -60.0f, 0.0f);
+    m_peak_dbfs = keel::clamp(20.0f * keel::log10(keel::max(peak, 1e-5f)), -60.0f, 0.0f);
     m_stereo_meter_db[0] = m_rms_dbfs;
     m_stereo_meter_db[1] = keel::clamp(m_rms_dbfs - 1.2f, -60.0f, 0.0f);
 
@@ -427,7 +426,7 @@ void AudioCapture::compute_metrics_and_spectrum() {
 
     for (usize k = 0; k < kSpectrumBins; ++k) {
         const f32 mag = fft_buf[k].abs() * inv_norm;
-        const f32 db = keel::clamp(20.0f * std::log10(keel::max(mag, 1e-6f)), -110.0f, 0.0f);
+        const f32 db = keel::clamp(20.0f * keel::log10(keel::max(mag, 1e-6f)), -110.0f, 0.0f);
         m_spectrum_db[k] = db;
         if (k > 1 && db > max_bin_db) {
             max_bin_db = db;

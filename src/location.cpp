@@ -1,9 +1,8 @@
 #include "keel/mobile/location.h"
 #include "keel/algo.h"
 
-#include <chrono>
-#include <cmath>
-#include <numbers>
+#include "keel/math.h"
+#include "keel/time.h"
 
 #ifdef __ANDROID__
 #include <jni.h>
@@ -14,14 +13,11 @@ namespace keel {
 namespace {
 
 constexpr f64 kEarthRadiusMeters = 6371008.8;
-constexpr f64 kDegToRad = std::numbers::pi / 180.0;
-constexpr f64 kRadToDeg = 180.0 / std::numbers::pi;
+constexpr f64 kDegToRad = keel::kPi / 180.0;
+constexpr f64 kRadToDeg = 180.0 / keel::kPi;
 
 [[nodiscard]] u64 now_steady_ms() noexcept {
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
-    return static_cast<u64>(keel::max<i64>(0, ms));
+    return monotonic_ms();
 }
 
 } // namespace
@@ -53,7 +49,7 @@ bool LocationService::initialize(void* jni_env, void* android_activity) {
     m_track_history.clear();
     m_total_distance_meters = 0.0;
 
-    for (int i = 0; i < 24; ++i) {
+    for (i32 i = 0; i < 24; ++i) {
         step_simulated_route(0.25);
     }
 
@@ -181,8 +177,8 @@ void LocationService::step_simulated_route(f64 dt_seconds) {
     const f64 omega = 0.085;
     const f64 phase = m_sim_time_sec * omega;
 
-    const f64 d_lat = 0.011 * std::sin(phase);
-    const f64 d_lon = 0.018 * std::sin(phase * 0.5) * std::cos(phase * 0.5);
+    const f64 d_lat = 0.011 * keel::sin(phase);
+    const f64 d_lon = 0.018 * keel::sin(phase * 0.5) * keel::cos(phase * 0.5);
 
     const GeoCoord prev_coord = m_latest_fix.coord;
     const GeoCoord new_coord{
@@ -197,8 +193,8 @@ void LocationService::step_simulated_route(f64 dt_seconds) {
     }
 
     m_latest_fix.coord = new_coord;
-    m_latest_fix.altitude_meters = 16.0f + 4.5f * static_cast<f32>(std::sin(m_sim_time_sec * 0.2));
-    m_latest_fix.horizontal_accuracy_m = 2.8f + 0.6f * static_cast<f32>(std::cos(m_sim_time_sec * 0.35));
+    m_latest_fix.altitude_meters = 16.0f + 4.5f * static_cast<f32>(keel::sin(m_sim_time_sec * 0.2));
+    m_latest_fix.horizontal_accuracy_m = 2.8f + 0.6f * static_cast<f32>(keel::cos(m_sim_time_sec * 0.35));
     m_latest_fix.timestamp_ms = now_steady_ms();
     m_latest_fix.has_fix = true;
     m_latest_fix.is_mock = true;
@@ -230,10 +226,10 @@ f64 LocationService::distance_meters(GeoCoord a, GeoCoord b) noexcept {
     const f64 d_lat = (b.lat - a.lat) * kDegToRad;
     const f64 d_lon = (b.lon - a.lon) * kDegToRad;
 
-    const f64 sin_lat = std::sin(d_lat * 0.5);
-    const f64 sin_lon = std::sin(d_lon * 0.5);
-    const f64 h = sin_lat * sin_lat + std::cos(lat1) * std::cos(lat2) * sin_lon * sin_lon;
-    return 2.0 * kEarthRadiusMeters * std::asin(keel::min(1.0, std::sqrt(h)));
+    const f64 sin_lat = keel::sin(d_lat * 0.5);
+    const f64 sin_lon = keel::sin(d_lon * 0.5);
+    const f64 h = sin_lat * sin_lat + keel::cos(lat1) * keel::cos(lat2) * sin_lon * sin_lon;
+    return 2.0 * kEarthRadiusMeters * keel::asin(keel::min(1.0, keel::sqrt(h)));
 }
 
 f32 LocationService::bearing_degrees(GeoCoord a, GeoCoord b) noexcept {
@@ -241,10 +237,10 @@ f32 LocationService::bearing_degrees(GeoCoord a, GeoCoord b) noexcept {
     const f64 lat2 = b.lat * kDegToRad;
     const f64 d_lon = (b.lon - a.lon) * kDegToRad;
 
-    const f64 y = std::sin(d_lon) * std::cos(lat2);
-    const f64 x = std::cos(lat1) * std::sin(lat2) -
-                  std::sin(lat1) * std::cos(lat2) * std::cos(d_lon);
-    const f64 brg = std::fmod(std::atan2(y, x) * kRadToDeg + 360.0, 360.0);
+    const f64 y = keel::sin(d_lon) * keel::cos(lat2);
+    const f64 x = keel::cos(lat1) * keel::sin(lat2) -
+                  keel::sin(lat1) * keel::cos(lat2) * keel::cos(d_lon);
+    const f64 brg = keel::fmod(keel::atan2(y, x) * kRadToDeg + 360.0, 360.0);
     return static_cast<f32>(brg);
 }
 

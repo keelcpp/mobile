@@ -1,8 +1,8 @@
 #include "keel/mobile/system.h"
 
-#include <algorithm>
-#include <cmath>
-#include <cstdlib>
+#include "keel/algo.h"
+#include "keel/math.h"
+#include "keel/number.h"
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -71,7 +71,7 @@ void SystemBridge::query_android_device_info() {
         m_device_info.os_version = SmallString<64>(StringRef(prop_buf));
     }
     if (__system_property_get("ro.build.version.sdk", prop_buf) > 0) {
-        m_device_info.sdk_int = std::atoi(prop_buf);
+        m_device_info.sdk_int = parse_i32(StringRef(prop_buf)).value_or(0);
     }
     KEEL_SYS_LOGI("Device: %s %s (Android %s, SDK %d)",
                   m_device_info.manufacturer.c_str(),
@@ -150,7 +150,7 @@ void SystemBridge::poll_battery_status() {
 #endif
 
     if (m_device_info.is_simulator) {
-        m_battery.temperature_c = 29.0f + 1.5f * std::sin(static_cast<f32>(m_haptic_count) * 0.2f);
+        m_battery.temperature_c = 29.0f + 1.5f * keel::sin(static_cast<f32>(m_haptic_count) * 0.2f);
     }
 }
 

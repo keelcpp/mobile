@@ -1,10 +1,10 @@
 #include "keel/mobile/camera.h"
 
-#include <algorithm>
-#include <atomic>
-#include <cmath>
-#include <cstring>
-#include <mutex>
+#include "keel/algo.h"
+#include "keel/atomic.h"
+#include "keel/math.h"
+#include "keel/memory.h"
+#include "keel/sync.h"
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -51,12 +51,12 @@ struct CameraService::AndroidCameraState {
     ACaptureSessionOutput* session_output = nullptr;
     ACameraCaptureSession* capture_session = nullptr;
 
-    std::mutex frame_mutex;
+    keel::Mutex frame_mutex;
     Array<u8> latest_rgb;
     u32 latest_width = 0;
     u32 latest_height = 0;
-    std::atomic<bool> has_new_frame{false};
-    std::atomic<bool> device_disconnected{false};
+    keel::Atomic<bool> has_new_frame{false};
+    keel::Atomic<bool> device_disconnected{false};
 
     i32 sensor_orientation_deg = 90;
     CameraFacing facing = CameraFacing::Back;
@@ -66,15 +66,15 @@ struct CameraService::AndroidCameraState {
     static void on_device_disconnected(void* context, ACameraDevice* /*device*/) {
         auto* self = static_cast<AndroidCameraState*>(context);
         if (self) {
-            self->device_disconnected.store(true, std::memory_order_release);
+            self->device_disconnected.store(true, keel::MemoryOrder::Release);
         }
     }
 
-    static void on_device_error(void* context, ACameraDevice* /*device*/, int error) {
+    static void on_device_error(void* context, ACameraDevice* /*device*/, int error) { // keel-lint: ignore
         auto* self = static_cast<AndroidCameraState*>(context);
         KEEL_CAM_LOGW("Camera2 device error: %d", error);
         if (self) {
-            self->device_disconnected.store(true, std::memory_order_release);
+            self->device_disconnected.store(true, keel::MemoryOrder::Release);
         }
     }
 
@@ -92,17 +92,17 @@ struct CameraService::AndroidCameraState {
             return;
         }
 
-        int32_t src_w = 0;
-        int32_t src_h = 0;
+        i32 src_w = 0;
+        i32 src_h = 0;
         AImage_getWidth(image, &src_w);
         AImage_getHeight(image, &src_h);
 
-        uint8_t* y_data = nullptr;
-        uint8_t* u_data = nullptr;
-        uint8_t* v_data = nullptr;
-        int y_len = 0, u_len = 0, v_len = 0;
-        int32_t y_row_stride = 0, uv_row_stride = 0;
-        int32_t uv_pixel_stride = 1;
+        u8* y_data = nullptr;
+        u8* u_data = nullptr;
+        u8* v_data = nullptr;
+        i32 y_len = 0, u_len = 0, v_len = 0;
+        i32 y_row_stride = 0, uv_row_stride = 0;
+        i32 uv_pixel_stride = 1;
 
         if (AImage_getPlaneData(image, 0, &y_data, &y_len) == AMEDIA_OK &&
             AImage_getPlaneData(image, 1, &u_data, &u_len) == AMEDIA_OK &&
@@ -120,14 +120,14 @@ struct CameraService::AndroidCameraState {
 
             Array<u8> rgb(static_cast<usize>(dst_w) * static_cast<usize>(dst_h) * 3u);
 
-            for (int32_t sy = 0; sy < src_h; ++sy) {
-                const uint8_t* y_row = y_data + sy * y_row_stride;
-                const uint8_t* u_row = u_data + (sy >> 1) * uv_row_stride;
-                const uint8_t* v_row = v_data + (sy >> 1) * uv_row_stride;
+            for (i32 sy = 0; sy < src_h; ++sy) {
+                const u8* y_row = y_data + sy * y_row_stride;
+                const u8* u_row = u_data + (sy >> 1) * uv_row_stride;
+                const u8* v_row = v_data + (sy >> 1) * uv_row_stride;
 
-                for (int32_t sx = 0; sx < src_w; ++sx) {
+                for (i32 sx = 0; sx < src_w; ++sx) {
                     const i32 Y = static_cast<i32>(y_row[sx]);
-                    const int32_t uv_offset = (sx >> 1) * uv_pixel_stride;
+                    const i32 uv_offset = (sx >> 1) * uv_pixel_stride;
                     const i32 U = static_cast<i32>(u_row[uv_offset]) - 128;
                     const i32 V = static_cast<i32>(v_row[uv_offset]) - 128;
 
@@ -163,11 +163,11 @@ struct CameraService::AndroidCameraState {
             }
 
             {
-                std::lock_guard<std::mutex> lock(self->frame_mutex);
-                self->latest_rgb = std::move(rgb);
+                keel::LockGuard<keel::Mutex> lock(self->frame_mutex);
+                self->latest_rgb = keel::move(rgb);
                 self->latest_width = dst_w;
                 self->latest_height = dst_h;
-                self->has_new_frame.store(true, std::memory_order_release);
+                self->has_new_frame.store(true, keel::MemoryOrder::Release);
             }
         }
 
@@ -195,7 +195,7 @@ bool CameraService::initialize() {
     if (m_android_cam->manager) {
         ACameraIdList* id_list = nullptr;
         if (ACameraManager_getCameraIdList(m_android_cam->manager, &id_list) == ACAMERA_OK && id_list) {
-            for (int i = 0; i < id_list->numCameras; ++i) {
+            for (i32 i = 0; i < id_list->numCameras; ++i) {
                 const char* id_str = id_list->cameraIds[i];
                 if (!id_str) continue;
 
@@ -214,7 +214,7 @@ bool CameraService::initialize() {
 
                 ACameraMetadata_const_entry entry{};
                 if (ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_FACING, &entry) == ACAMERA_OK && entry.count > 0) {
-                    const uint8_t facing = entry.data.u8[0];
+                    const u8 facing = entry.data.u8[0];
                     if (facing == ACAMERA_LENS_FACING_FRONT) {
                         info.facing = CameraFacing::Front;
                         info.name = SmallString<64>("Front Selfie Camera");
@@ -338,10 +338,10 @@ void CameraService::push_external_rgb_frame(ArrayRef<u8> rgb, u32 width, u32 hei
     }
 
     if (stride == packed_row) {
-        std::memcpy(m_rgb_pixels.data(), rgb.data(), total_bytes);
+        keel::mem_copy(m_rgb_pixels.data(), rgb.data(), total_bytes);
     } else {
         for (u32 y = 0; y < height; ++y) {
-            std::memcpy(m_rgb_pixels.data() + static_cast<usize>(y) * packed_row,
+            keel::mem_copy(m_rgb_pixels.data() + static_cast<usize>(y) * packed_row,
                         rgb.data() + static_cast<usize>(y) * stride,
                         packed_row);
         }
@@ -365,15 +365,15 @@ bool CameraService::open_android_camera(const CameraDeviceInfo& dev, i32 width, 
     m_android_cam->facing = dev.facing;
     m_android_cam->camera_id = dev.android_camera_id;
     m_android_cam->torch_supported = dev.has_flash_unit;
-    m_android_cam->device_disconnected.store(false, std::memory_order_release);
-    m_android_cam->has_new_frame.store(false, std::memory_order_release);
+    m_android_cam->device_disconnected.store(false, keel::MemoryOrder::Release);
+    m_android_cam->has_new_frame.store(false, keel::MemoryOrder::Release);
 
-    const i32 req_w = std::max(width, height);
-    const i32 req_h = std::min(width, height);
+    const i32 req_w = keel::max(width, height);
+    const i32 req_h = keel::min(width, height);
 
     media_status_t mstatus = AImageReader_new(req_w, req_h, AIMAGE_FORMAT_YUV_420_888, 3, &m_android_cam->image_reader);
     if (mstatus != AMEDIA_OK || !m_android_cam->image_reader) {
-        KEEL_CAM_LOGE("AImageReader_new(%d, %d) failed: %d", req_w, req_h, static_cast<int>(mstatus));
+        KEEL_CAM_LOGE("AImageReader_new(%d, %d) failed: %d", req_w, req_h, as<i32>(mstatus));
         close_android_camera();
         return false;
     }
@@ -398,7 +398,7 @@ bool CameraService::open_android_camera(const CameraDeviceInfo& dev, i32 width, 
         m_android_cam->manager, dev.android_camera_id.c_str(), &dev_callbacks, &m_android_cam->device);
     if (cstatus != ACAMERA_OK || !m_android_cam->device) {
         KEEL_CAM_LOGW("ACameraManager_openCamera(%s) failed: %d",
-                      dev.android_camera_id.c_str(), static_cast<int>(cstatus));
+                      dev.android_camera_id.c_str(), as<i32>(cstatus));
         close_android_camera();
         return false;
     }
@@ -528,10 +528,10 @@ bool CameraService::open_camera(usize device_index, i32 width, i32 height) {
 
     m_using_synthetic = true;
     m_got_external_frame = false;
-    m_frame_width = static_cast<u32>(std::clamp(width > 0 ? width : 360, 120, 1920));
-    m_frame_height = static_cast<u32>(std::clamp(height > 0 ? height : 480, 120, 1920));
+    m_frame_width = static_cast<u32>(keel::clamp(width > 0 ? width : 360, 120, 1920));
+    m_frame_height = static_cast<u32>(keel::clamp(height > 0 ? height : 480, 120, 1920));
     if (m_frame_width > m_frame_height) {
-        std::swap(m_frame_width, m_frame_height);
+        keel::swap(m_frame_width, m_frame_height);
     }
     m_rgb_pixels.resize(static_cast<usize>(m_frame_width) * static_cast<usize>(m_frame_height) * 3u, 0);
     m_streaming = true;
@@ -575,7 +575,7 @@ void CameraService::set_torch_enabled(bool enabled) {
 #if defined(__ANDROID__)
     if (m_android_cam && m_android_cam->capture_request && m_android_cam->capture_session &&
         m_android_cam->torch_supported) {
-        uint8_t flash_mode = enabled ? ACAMERA_FLASH_MODE_TORCH : ACAMERA_FLASH_MODE_OFF;
+        u8 flash_mode = enabled ? ACAMERA_FLASH_MODE_TORCH : ACAMERA_FLASH_MODE_OFF;
         ACaptureRequest_setEntry_u8(m_android_cam->capture_request, ACAMERA_FLASH_MODE, 1, &flash_mode);
         ACameraCaptureSession_setRepeatingRequest(
             m_android_cam->capture_session, nullptr, 1, &m_android_cam->capture_request, nullptr);
@@ -584,15 +584,15 @@ void CameraService::set_torch_enabled(bool enabled) {
 }
 
 void CameraService::trigger_tap_to_focus(Vec2f normalized_point) noexcept {
-    m_focus_point.x = std::clamp(normalized_point.x, 0.05f, 0.95f);
-    m_focus_point.y = std::clamp(normalized_point.y, 0.05f, 0.95f);
+    m_focus_point.x = keel::clamp(normalized_point.x, 0.05f, 0.95f);
+    m_focus_point.y = keel::clamp(normalized_point.y, 0.05f, 0.95f);
 }
 
 void CameraService::set_exposure_compensation_ev(f32 ev) noexcept {
-    m_exposure_ev = std::clamp(ev, -3.0f, 3.0f);
+    m_exposure_ev = keel::clamp(ev, -3.0f, 3.0f);
 #if defined(__ANDROID__)
     if (m_android_cam && m_android_cam->capture_request && m_android_cam->capture_session) {
-        int32_t ev_steps = static_cast<int32_t>(std::round(m_exposure_ev * 2.0f));
+        i32 ev_steps = static_cast<i32>(keel::round(m_exposure_ev * 2.0f));
         ACaptureRequest_setEntry_i32(
             m_android_cam->capture_request, ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION, 1, &ev_steps);
         ACameraCaptureSession_setRepeatingRequest(
@@ -602,13 +602,13 @@ void CameraService::set_exposure_compensation_ev(f32 ev) noexcept {
 }
 
 void CameraService::set_zoom_factor(f32 zoom) noexcept {
-    m_zoom_factor = std::clamp(zoom, 1.0f, 8.0f);
+    m_zoom_factor = keel::clamp(zoom, 1.0f, 8.0f);
 }
 
 bool CameraService::capture_snapshot() {
     if (m_rgb_pixels.empty()) return false;
     m_last_captured_rgb.resize(m_rgb_pixels.size());
-    std::memcpy(m_last_captured_rgb.data(), m_rgb_pixels.data(), m_rgb_pixels.size());
+    keel::mem_copy(m_last_captured_rgb.data(), m_rgb_pixels.data(), m_rgb_pixels.size());
     m_captured_photos++;
     return true;
 }
@@ -616,7 +616,7 @@ bool CameraService::capture_snapshot() {
 void CameraService::update_frame(f64 dt_seconds) {
     if (!m_streaming || m_paused) return;
 
-    const f64 clamped_dt = std::clamp(dt_seconds, 0.0, 0.1);
+    const f64 clamped_dt = keel::clamp(dt_seconds, 0.0, 0.1);
     m_fps_accum_sec += clamped_dt;
 
     bool new_frame = false;
@@ -635,17 +635,17 @@ void CameraService::update_frame(f64 dt_seconds) {
     }
 
     if (m_android_cam && !m_using_synthetic) {
-        if (m_android_cam->device_disconnected.load(std::memory_order_acquire)) {
+        if (m_android_cam->device_disconnected.load(keel::MemoryOrder::Acquire)) {
             close_android_camera();
             m_using_synthetic = true;
-        } else if (m_android_cam->has_new_frame.exchange(false, std::memory_order_acq_rel)) {
-            std::lock_guard<std::mutex> lock(m_android_cam->frame_mutex);
+        } else if (m_android_cam->has_new_frame.exchange(false, keel::MemoryOrder::AcqRel)) {
+            keel::LockGuard<keel::Mutex> lock(m_android_cam->frame_mutex);
             if (!m_android_cam->latest_rgb.empty() &&
                 m_android_cam->latest_width > 0 &&
                 m_android_cam->latest_height > 0) {
                 m_frame_width = m_android_cam->latest_width;
                 m_frame_height = m_android_cam->latest_height;
-                m_rgb_pixels = std::move(m_android_cam->latest_rgb);
+                m_rgb_pixels = keel::move(m_android_cam->latest_rgb);
                 new_frame = true;
                 m_fps_frame_count++;
             }
@@ -682,12 +682,12 @@ void CameraService::generate_procedural_frame(f64 dt_seconds) {
     }
 
     const bool is_front = (active_device() && active_device()->facing == CameraFacing::Front);
-    const f32 ev_gain = std::pow(2.0f, m_exposure_ev * 0.5f) * (m_torch_enabled ? 1.25f : 1.0f);
+    const f32 ev_gain = keel::pow(2.0f, m_exposure_ev * 0.5f) * (m_torch_enabled ? 1.25f : 1.0f);
     const f32 zoom = m_zoom_factor;
     const f32 t = static_cast<f32>(m_sim_time_sec);
 
-    const f32 target_cx = 0.5f + 0.22f * std::cos(t * 0.9f) * (is_front ? -1.0f : 1.0f);
-    const f32 target_cy = 0.46f + 0.16f * std::sin(t * 1.3f);
+    const f32 target_cx = 0.5f + 0.22f * keel::cos(t * 0.9f) * (is_front ? -1.0f : 1.0f);
+    const f32 target_cy = 0.46f + 0.16f * keel::sin(t * 1.3f);
 
     static constexpr u8 kBars[7][3] = {
         {215, 215, 215}, // White
@@ -717,13 +717,13 @@ void CameraService::generate_procedural_frame(f64 dt_seconds) {
             f32 b = 36.0f;
 
             if (v < 0.20f) {
-                const i32 bar_idx = std::clamp(static_cast<i32>(u * 7.0f), 0, 6);
+                const i32 bar_idx = keel::clamp(static_cast<i32>(u * 7.0f), 0, 6);
                 const i32 idx = is_front ? (6 - bar_idx) : bar_idx;
                 r = static_cast<f32>(kBars[idx][0]);
                 g = static_cast<f32>(kBars[idx][1]);
                 b = static_cast<f32>(kBars[idx][2]);
             } else if (v > 0.85f) {
-                const f32 luma = std::clamp(u * 255.0f, 0.0f, 255.0f);
+                const f32 luma = keel::clamp(u * 255.0f, 0.0f, 255.0f);
                 r = luma;
                 g = luma;
                 b = luma;
@@ -733,8 +733,8 @@ void CameraService::generate_procedural_frame(f64 dt_seconds) {
                 g = 34.0f + 56.0f * sky;
                 b = 48.0f + 85.0f * sky;
 
-                const f32 gx = std::fmod(u * 12.0f + 100.0f, 1.0f);
-                const f32 gy = std::fmod(v * 16.0f + 100.0f, 1.0f);
+                const f32 gx = keel::fmod(u * 12.0f + 100.0f, 1.0f);
+                const f32 gy = keel::fmod(v * 16.0f + 100.0f, 1.0f);
                 if (gx < 0.035f || gy < 0.035f) {
                     r += 18.0f;
                     g += 24.0f;
@@ -743,12 +743,12 @@ void CameraService::generate_procedural_frame(f64 dt_seconds) {
 
                 const f32 dx = (u - target_cx) * aspect;
                 const f32 dy = (v - target_cy);
-                const f32 dist = std::sqrt(dx * dx + dy * dy);
+                const f32 dist = keel::sqrt(dx * dx + dy * dy);
                 if (dist < 0.16f) {
-                    const f32 angle = std::atan2(dy, dx) + t * 0.6f;
-                    const f32 spoke = std::cos(angle * 12.0f);
+                    const f32 angle = keel::atan2(dy, dx) + t * 0.6f;
+                    const f32 spoke = keel::cos(angle * 12.0f);
                     const f32 star_val = (spoke > 0.0f) ? 225.0f : 42.0f;
-                    const f32 ring_edge = std::abs(dist - 0.155f);
+                    const f32 ring_edge = keel::abs(dist - 0.155f);
                     if (ring_edge < 0.006f) {
                         r = 46.0f;
                         g = 215.0f;
@@ -767,7 +767,7 @@ void CameraService::generate_procedural_frame(f64 dt_seconds) {
 
             const f32 vig_dx = (u_raw - 0.5f) * 1.35f;
             const f32 vig_dy = (v_raw - 0.5f) * 1.35f;
-            const f32 vig = std::clamp(1.0f - 0.28f * (vig_dx * vig_dx + vig_dy * vig_dy), 0.55f, 1.0f);
+            const f32 vig = keel::clamp(1.0f - 0.28f * (vig_dx * vig_dx + vig_dy * vig_dy), 0.55f, 1.0f);
 
             row_ptr[x * 3u + 0] = clamp_byte_f32(r * vig * ev_gain);
             row_ptr[x * 3u + 1] = clamp_byte_f32(g * vig * ev_gain);
@@ -777,10 +777,10 @@ void CameraService::generate_procedural_frame(f64 dt_seconds) {
 }
 
 void CameraService::compute_frame_histograms() {
-    std::memset(m_stats.hist_luma, 0, sizeof(m_stats.hist_luma));
-    std::memset(m_stats.hist_r, 0, sizeof(m_stats.hist_r));
-    std::memset(m_stats.hist_g, 0, sizeof(m_stats.hist_g));
-    std::memset(m_stats.hist_b, 0, sizeof(m_stats.hist_b));
+    keel::mem_zero(m_stats.hist_luma, sizeof(m_stats.hist_luma));
+    keel::mem_zero(m_stats.hist_r, sizeof(m_stats.hist_r));
+    keel::mem_zero(m_stats.hist_g, sizeof(m_stats.hist_g));
+    keel::mem_zero(m_stats.hist_b, sizeof(m_stats.hist_b));
 
     m_stats.width = m_frame_width;
     m_stats.height = m_frame_height;
@@ -814,7 +814,7 @@ void CameraService::compute_frame_histograms() {
 
         // ITU-R BT.709 integer approximation: Y = (54*R + 183*G + 19*B) >> 8
         const u32 y = (54u * r + 183u * g + 19u * b) >> 8u;
-        const u8 luma = static_cast<u8>(std::min<u32>(y, 255u));
+        const u8 luma = static_cast<u8>(keel::min<u32>(y, 255u));
 
         m_stats.hist_r[r]++;
         m_stats.hist_g[g]++;
@@ -827,9 +827,9 @@ void CameraService::compute_frame_histograms() {
 
     const f64 inv_n = 1.0 / static_cast<f64>(pixel_count);
     const f64 mean = sum_luma * inv_n;
-    const f64 variance = std::max(0.0, sum_luma_sq * inv_n - mean * mean);
+    const f64 variance = keel::max(0.0, sum_luma_sq * inv_n - mean * mean);
     m_stats.mean_luminance = static_cast<f32>(mean);
-    m_stats.contrast_rms = static_cast<f32>(std::sqrt(variance));
+    m_stats.contrast_rms = static_cast<f32>(keel::sqrt(variance));
 }
 
 } // namespace keel
