@@ -22,8 +22,8 @@ enum class FlashMode : u8 {
 struct CameraDeviceInfo {
     u32 device_index = 0;
     u32 platform_camera_id = 0;
-    InplaceString<64> android_camera_id{};
-    InplaceString<64> name{};
+    SmallString<64> android_camera_id{};
+    SmallString<64> name{};
     CameraFacing facing = CameraFacing::Back;
     i32 sensor_orientation_deg = 90;
     bool has_flash_unit = false;

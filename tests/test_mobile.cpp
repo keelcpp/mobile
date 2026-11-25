@@ -1,24 +1,22 @@
 #include "keel/mobile.h"
 #include "keel/format.h"
-
-#include <cmath>
-#include <cstdlib>
+#include "keel/math.h"
 
 using namespace keel;
 
 namespace {
 
-int g_failures = 0;
+i32 g_failures = 0;
 
-void check_impl(bool cond, const char* expr, const char* file, int line) {
+void check_impl(bool cond, const char* expr, const char* file, i32 line) {
     if (!cond) {
-        keel::eprintln("[FAIL] %s:%d: %s", file, line, expr);
+        keel::eprintln("[FAIL] {}:{}: {}", file, line, expr);
         ++g_failures;
     }
 }
 
 #define CHECK(expr) check_impl((expr), #expr, __FILE__, __LINE__)
-#define CHECK_NEAR(a, b, tol) check_impl(std::abs(static_cast<double>(a) - static_cast<double>(b)) <= static_cast<double>(tol), #a " ~= " #b, __FILE__, __LINE__)
+#define CHECK_NEAR(a, b, tol) check_impl(keel::abs(as<f64>(a) - as<f64>(b)) <= as<f64>(tol), #a " ~= " #b, __FILE__, __LINE__)
 
 void test_sensors() {
     // Sea level standard pressure = 1013.25 hPa -> 0.0 m
@@ -38,7 +36,7 @@ void test_sensors() {
 
     // Rotation of +90 degrees around X axis (phone held upright in portrait mode)
     const f32 half_rad = 45.0f * (3.1415926535f / 180.0f);
-    const Quaternion upright{std::cos(half_rad), std::sin(half_rad), 0.0f, 0.0f};
+    const Quaternion upright{keel::cos(half_rad), keel::sin(half_rad), 0.0f, 0.0f};
     const EulerAngles handheld = SensorManager::quaternion_to_euler(upright, AttitudeReference::Handheld);
     CHECK_NEAR(handheld.pitch_deg, 0.0f, 0.2f);
     CHECK_NEAR(handheld.roll_deg, 0.0f, 0.2f);
@@ -49,7 +47,7 @@ void test_sensors() {
     sensors.set_use_simulator_override(true);
     sensors.sim_config().animate_motion = true;
 
-    for (int i = 0; i < 15; ++i) {
+    for (i32 i = 0; i < 15; ++i) {
         sensors.update_frame(1.0 / 60.0);
     }
 
@@ -87,7 +85,7 @@ void test_camera() {
 
     const auto& stats = cam.frame_stats();
     u64 hist_sum = 0;
-    for (int i = 0; i < 256; ++i) {
+    for (usize i = 0; i < 256; ++i) {
         hist_sum += stats.hist_luma[i];
     }
     CHECK(hist_sum == static_cast<u64>(w) * static_cast<u64>(h));
@@ -125,7 +123,7 @@ void test_location() {
     LocationService loc;
     CHECK(loc.initialize());
 
-    for (int i = 0; i < 20; ++i) {
+    for (i32 i = 0; i < 20; ++i) {
         loc.update_frame(0.15);
     }
 
@@ -146,7 +144,7 @@ void test_audio() {
     audio.set_synth_fundamental_hz(1000.0f);
     audio.set_synth_noise_floor_db(-60.0f);
 
-    for (int i = 0; i < 6; ++i) {
+    for (i32 i = 0; i < 6; ++i) {
         audio.update_frame(1.0 / 60.0);
     }
 
@@ -196,8 +194,8 @@ int main() {
 
     if (g_failures == 0) {
         keel::println("All keel_mobile tests passed.");
-        return EXIT_SUCCESS;
+        return 0;
     }
-    keel::eprintln("%d test(s) failed.", g_failures);
-    return EXIT_FAILURE;
+    keel::eprintln("{} test(s) failed.", g_failures);
+    return 1;
 }

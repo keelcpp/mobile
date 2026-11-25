@@ -60,7 +60,7 @@ struct CameraService::AndroidCameraState {
 
     i32 sensor_orientation_deg = 90;
     CameraFacing facing = CameraFacing::Back;
-    InplaceString<64> camera_id{};
+    SmallString<64> camera_id{};
     bool torch_supported = false;
 
     static void on_device_disconnected(void* context, ACameraDevice* /*device*/) {
@@ -206,7 +206,7 @@ bool CameraService::initialize() {
 
                 CameraDeviceInfo info{};
                 info.device_index = static_cast<u32>(m_devices.size());
-                info.android_camera_id = InplaceString<64>(StringRef(id_str));
+                info.android_camera_id = SmallString<64>(StringRef(id_str));
                 info.preferred_width = 640;
                 info.preferred_height = 480;
                 info.preferred_fps = 30.0f;
@@ -217,16 +217,16 @@ bool CameraService::initialize() {
                     const uint8_t facing = entry.data.u8[0];
                     if (facing == ACAMERA_LENS_FACING_FRONT) {
                         info.facing = CameraFacing::Front;
-                        info.name = InplaceString<64>("Front Selfie Camera");
+                        info.name = SmallString<64>("Front Selfie Camera");
                     } else if (facing == ACAMERA_LENS_FACING_EXTERNAL) {
                         info.facing = CameraFacing::External;
-                        info.name = InplaceString<64>("External USB Camera");
+                        info.name = SmallString<64>("External USB Camera");
                     } else {
                         info.facing = CameraFacing::Back;
-                        info.name = InplaceString<64>("Rear Main Camera");
+                        info.name = SmallString<64>("Rear Main Camera");
                     }
                 } else {
-                    info.name = InplaceString<64>("Android Camera");
+                    info.name = SmallString<64>("Android Camera");
                 }
 
                 if (ACameraMetadata_getConstEntry(chars, ACAMERA_SENSOR_ORIENTATION, &entry) == ACAMERA_OK && entry.count > 0) {
@@ -259,7 +259,7 @@ bool CameraService::initialize() {
     if (m_devices.empty()) {
         CameraDeviceInfo back_sim{};
         back_sim.device_index = 0;
-        back_sim.name = InplaceString<64>("Optical Test Camera (Rear 1x)");
+        back_sim.name = SmallString<64>("Optical Test Camera (Rear 1x)");
         back_sim.facing = CameraFacing::Back;
         back_sim.sensor_orientation_deg = 90;
         back_sim.has_flash_unit = true;
@@ -271,7 +271,7 @@ bool CameraService::initialize() {
 
         CameraDeviceInfo front_sim{};
         front_sim.device_index = 1;
-        front_sim.name = InplaceString<64>("Optical Test Camera (Front Selfie)");
+        front_sim.name = SmallString<64>("Optical Test Camera (Front Selfie)");
         front_sim.facing = CameraFacing::Front;
         front_sim.sensor_orientation_deg = 270;
         front_sim.has_flash_unit = false;
@@ -308,9 +308,19 @@ void CameraService::register_external_device(const CameraDeviceInfo& dev) {
     if (!m_devices.empty() && m_devices[0].is_synthetic) {
         m_devices.clear();
     }
-    CameraDeviceInfo copy = dev;
+    CameraDeviceInfo copy{};
     copy.device_index = static_cast<u32>(m_devices.size());
-    m_devices.push_back(copy);
+    copy.platform_camera_id = dev.platform_camera_id;
+    copy.android_camera_id = SmallString<64>(dev.android_camera_id.as_ref());
+    copy.name = SmallString<64>(dev.name.as_ref());
+    copy.facing = dev.facing;
+    copy.sensor_orientation_deg = dev.sensor_orientation_deg;
+    copy.has_flash_unit = dev.has_flash_unit;
+    copy.preferred_width = dev.preferred_width;
+    copy.preferred_height = dev.preferred_height;
+    copy.preferred_fps = dev.preferred_fps;
+    copy.is_synthetic = dev.is_synthetic;
+    m_devices.push_back(keel::move(copy));
 }
 
 void CameraService::push_external_rgb_frame(ArrayRef<u8> rgb, u32 width, u32 height, usize row_stride) {

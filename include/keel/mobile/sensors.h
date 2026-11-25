@@ -37,8 +37,8 @@ enum class SensorRate : u8 {
 // Metadata describing an available physical or fused sensor on the device.
 struct SensorInfo {
     SensorType type = SensorType::Accelerometer;
-    InplaceString<64> name{};
-    InplaceString<64> vendor{};
+    SmallString<64> name{};
+    SmallString<64> vendor{};
     f32 max_range = 0.0f;
     f32 resolution = 0.0f;
     i32 min_delay_us = 0;

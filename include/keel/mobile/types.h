@@ -116,10 +116,10 @@ struct BatteryStatus {
 
 // Summary information about the host mobile device or simulator.
 struct DeviceInfo {
-    InplaceString<64> platform_name{"Android"};
-    InplaceString<64> manufacturer{"Generic"};
-    InplaceString<64> model{"Mobile Device"};
-    InplaceString<64> os_version{"14"};
+    SmallString<64> platform_name{"Android"};
+    SmallString<64> manufacturer{"Generic"};
+    SmallString<64> model{"Mobile Device"};
+    SmallString<64> os_version{"14"};
     i32 sdk_int = 34;
     bool is_simulator = false;
 };

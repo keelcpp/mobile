@@ -57,18 +57,18 @@ void SystemBridge::shutdown() {
 
 void SystemBridge::query_android_device_info() {
 #if defined(__ANDROID__)
-    m_device_info.platform_name = InplaceString<64>("Android");
+    m_device_info.platform_name = SmallString<64>("Android");
     m_device_info.is_simulator = false;
 
     char prop_buf[PROP_VALUE_MAX] = {0};
     if (__system_property_get("ro.product.manufacturer", prop_buf) > 0) {
-        m_device_info.manufacturer = InplaceString<64>(StringRef(prop_buf));
+        m_device_info.manufacturer = SmallString<64>(StringRef(prop_buf));
     }
     if (__system_property_get("ro.product.model", prop_buf) > 0) {
-        m_device_info.model = InplaceString<64>(StringRef(prop_buf));
+        m_device_info.model = SmallString<64>(StringRef(prop_buf));
     }
     if (__system_property_get("ro.build.version.release", prop_buf) > 0) {
-        m_device_info.os_version = InplaceString<64>(StringRef(prop_buf));
+        m_device_info.os_version = SmallString<64>(StringRef(prop_buf));
     }
     if (__system_property_get("ro.build.version.sdk", prop_buf) > 0) {
         m_device_info.sdk_int = std::atoi(prop_buf);
@@ -80,15 +80,15 @@ void SystemBridge::query_android_device_info() {
                   m_device_info.sdk_int);
 #else
 #if defined(_WIN32)
-    m_device_info.platform_name = InplaceString<64>("Windows (Mobile Sim)");
+    m_device_info.platform_name = SmallString<64>("Windows (Mobile Sim)");
 #elif defined(__APPLE__)
-    m_device_info.platform_name = InplaceString<64>("macOS / iOS (Mobile Sim)");
+    m_device_info.platform_name = SmallString<64>("macOS / iOS (Mobile Sim)");
 #else
-    m_device_info.platform_name = InplaceString<64>("Linux (Mobile Sim)");
+    m_device_info.platform_name = SmallString<64>("Linux (Mobile Sim)");
 #endif
-    m_device_info.manufacturer = InplaceString<64>("Keel");
-    m_device_info.model = InplaceString<64>("Pro Mobile Simulator");
-    m_device_info.os_version = InplaceString<64>("15.0");
+    m_device_info.manufacturer = SmallString<64>("Keel");
+    m_device_info.model = SmallString<64>("Pro Mobile Simulator");
+    m_device_info.os_version = SmallString<64>("15.0");
     m_device_info.sdk_int = 35;
     m_device_info.is_simulator = true;
 #endif
@@ -365,7 +365,7 @@ void SystemBridge::show_native_toast(StringRef message, bool long_duration) {
             );
             jmethodID show_method = env->GetMethodID(toast_cls, "show", "()V");
             if (make_text && show_method) {
-                InplaceString<256> msg_buf(message);
+                SmallString<256> msg_buf(message);
                 jstring jmsg = env->NewStringUTF(msg_buf.c_str());
                 jobject toast_obj = env->CallStaticObjectMethod(
                     toast_cls, make_text, activity, jmsg, static_cast<jint>(long_duration ? 1 : 0));

@@ -69,6 +69,18 @@ else()
     endif()
 endif()
 
+if(COMMAND keel_enforce_guidelines)
+    keel_enforce_guidelines(keel_mobile
+        SCOPE HEADERS_ONLY
+        BAN_RAW_INTS ALL
+        BAN_RAW_FLOATS ALL
+        HEADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        STANDALONE_HEADERS ${KEEL_MOBILE_BUILD_TESTS}
+        TEST_NAME test_guidelines_headers
+        WARNINGS OFF
+    )
+endif()
+
 # Install & package support (`find_package(keel_mobile)`)
 include(CMakePackageConfigHelpers)
 install(TARGETS keel_mobile EXPORT keel_mobileTargets
@@ -107,6 +119,14 @@ if( KEEL_MOBILE_BUILD_TESTS AND NOT ANDROID )
         target_compile_options(test_mobile PRIVATE /W4 /utf-8)
     else()
         target_compile_options(test_mobile PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    if(COMMAND keel_enforce_guidelines)
+        keel_enforce_guidelines(test_mobile
+            SCOPE ALL
+            BAN_RAW_INTS ALL
+            BAN_RAW_FLOATS ALL
+            WARNINGS OFF
+        )
     endif()
 
     add_test(NAME test_mobile COMMAND test_mobile)

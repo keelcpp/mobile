@@ -134,8 +134,8 @@ bool SensorManager::initialize() {
     const auto init_default_info = [&](SensorType t, const char* name, f32 max_range, f32 res) {
         auto& info = m_infos[static_cast<usize>(t)];
         info.type = t;
-        info.name.set_static(name);
-        info.vendor.set_static("keel Simulated IMU");
+        info.name.assign(name);
+        info.vendor.assign("keel Simulated IMU");
         info.max_range = max_range;
         info.resolution = res;
         info.min_delay_us = 5000;
