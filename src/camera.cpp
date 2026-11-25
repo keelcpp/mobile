@@ -247,7 +247,7 @@ bool CameraService::initialize() {
                     }
                 }
                 if (!already_have_facing) {
-                    m_devices.push_back(info);
+                    m_devices.push_back(keel::move(info));
                 }
             }
             ACameraManager_deleteCameraIdList(id_list);
@@ -267,7 +267,7 @@ bool CameraService::initialize() {
         back_sim.preferred_height = 480;
         back_sim.preferred_fps = 60.0f;
         back_sim.is_synthetic = true;
-        m_devices.push_back(back_sim);
+        m_devices.push_back(keel::move(back_sim));
 
         CameraDeviceInfo front_sim{};
         front_sim.device_index = 1;
@@ -279,7 +279,7 @@ bool CameraService::initialize() {
         front_sim.preferred_height = 480;
         front_sim.preferred_fps = 60.0f;
         front_sim.is_synthetic = true;
-        m_devices.push_back(front_sim);
+        m_devices.push_back(keel::move(front_sim));
     }
 
     m_initialized = true;
