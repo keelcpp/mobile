@@ -24,16 +24,17 @@
 namespace keel {
 
 namespace {
-constexpr f64 kPi = 3.14159265358979323846;
 
+#if defined(__ANDROID__)
 inline u8 clamp_byte(i32 v) noexcept {
     if (v < 0) return 0;
     if (v > 255) return 255;
     return static_cast<u8>(v);
 }
+#endif
 
 inline u8 clamp_byte_f32(f32 v) noexcept {
-    if (v <= 0.0f) return 0;
+    if (!(v > 0.0f)) return 0;
     if (v >= 255.0f) return 255;
     return static_cast<u8>(v + 0.5f);
 }
@@ -324,11 +325,13 @@ void CameraService::register_external_device(const CameraDeviceInfo& dev) {
 }
 
 void CameraService::push_external_rgb_frame(ArrayRef<u8> rgb, u32 width, u32 height, usize row_stride) {
-    if (width == 0 || height == 0 || rgb.empty()) return;
+    static constexpr u32 kMaxFrameDim = 16384u;
+    if (width == 0 || height == 0 || width > kMaxFrameDim || height > kMaxFrameDim || rgb.empty()) return;
 
     const usize packed_row = static_cast<usize>(width) * 3u;
     const usize stride = (row_stride >= packed_row) ? row_stride : packed_row;
-    if (rgb.size() < stride * static_cast<usize>(height - 1u) + packed_row) return;
+    if (rgb.size() < packed_row) return;
+    if (height > 1u && (rgb.size() - packed_row) / stride < static_cast<usize>(height - 1u)) return;
 
     m_frame_width = width;
     m_frame_height = height;
@@ -584,11 +587,16 @@ void CameraService::set_torch_enabled(bool enabled) {
 }
 
 void CameraService::trigger_tap_to_focus(Vec2f normalized_point) noexcept {
-    m_focus_point.x = keel::clamp(normalized_point.x, 0.05f, 0.95f);
-    m_focus_point.y = keel::clamp(normalized_point.y, 0.05f, 0.95f);
+    if (keel::is_finite(normalized_point.x)) {
+        m_focus_point.x = keel::clamp(normalized_point.x, 0.05f, 0.95f);
+    }
+    if (keel::is_finite(normalized_point.y)) {
+        m_focus_point.y = keel::clamp(normalized_point.y, 0.05f, 0.95f);
+    }
 }
 
 void CameraService::set_exposure_compensation_ev(f32 ev) noexcept {
+    if (!keel::is_finite(ev)) return;
     m_exposure_ev = keel::clamp(ev, -3.0f, 3.0f);
 #if defined(__ANDROID__)
     if (m_android_cam && m_android_cam->capture_request && m_android_cam->capture_session) {
@@ -602,6 +610,7 @@ void CameraService::set_exposure_compensation_ev(f32 ev) noexcept {
 }
 
 void CameraService::set_zoom_factor(f32 zoom) noexcept {
+    if (!keel::is_finite(zoom)) return;
     m_zoom_factor = keel::clamp(zoom, 1.0f, 8.0f);
 }
 
@@ -616,7 +625,7 @@ bool CameraService::capture_snapshot() {
 void CameraService::update_frame(f64 dt_seconds) {
     if (!m_streaming || m_paused) return;
 
-    const f64 clamped_dt = keel::clamp(dt_seconds, 0.0, 0.1);
+    const f64 clamped_dt = keel::is_finite(dt_seconds) ? keel::clamp(dt_seconds, 0.0, 0.1) : 0.0;
     m_fps_accum_sec += clamped_dt;
 
     bool new_frame = false;

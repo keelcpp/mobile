@@ -197,12 +197,18 @@ void SystemBridge::apply_simulated_cutout_if_needed() noexcept {
     }
 }
 
+void SystemBridge::set_screen_orientation(ScreenOrientation orientation) noexcept {
+    m_screen_orientation = orientation;
+    apply_simulated_cutout_if_needed();
+}
+
 void SystemBridge::set_simulate_mobile_cutout(bool enabled) noexcept {
     m_simulate_cutout = enabled;
     apply_simulated_cutout_if_needed();
 }
 
 void SystemBridge::update_frame(f64 dt_seconds) {
+    if (!keel::is_finite(dt_seconds) || dt_seconds <= 0.0) return;
     m_poll_timer_sec += dt_seconds;
     if (m_poll_timer_sec < 1.5) return;
     m_poll_timer_sec = 0.0;

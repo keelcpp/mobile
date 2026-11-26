@@ -21,6 +21,15 @@ constexpr f32 kGravityStandard = 9.80665f;
 constexpr f32 kRadToDeg = 180.0f / keel::as<f32>(keel::kPi);
 constexpr f32 kDegToRad = keel::as<f32>(keel::kPi) / 180.0f;
 
+[[nodiscard]] f32 wrap_deg_360(f32 deg) noexcept {
+    if (!keel::is_finite(deg)) return 0.0f;
+    f32 w = keel::fmod(deg, 360.0f);
+    if (w < 0.0f) w += 360.0f;
+    if (w >= 360.0f) w = 0.0f;
+    return w;
+}
+
+#ifdef __ANDROID__
 [[nodiscard]] constexpr i32 rate_to_delay_us(SensorRate rate) noexcept {
     switch (rate) {
         case SensorRate::Ui:      return 60000; // ~16.6 Hz
@@ -30,6 +39,7 @@ constexpr f32 kDegToRad = keel::as<f32>(keel::kPi) / 180.0f;
     }
     return 10000;
 }
+#endif
 
 [[nodiscard]] Quaternion euler_to_quaternion(f32 pitch_deg, f32 roll_deg, f32 yaw_deg) noexcept {
     const f32 half_pitch = (pitch_deg * kDegToRad) * 0.5f;
@@ -185,12 +195,12 @@ bool SensorManager::initialize() {
                 auto& info = m_infos[i];
                 if (s) {
                     if (const char* sname = ASensor_getName(s)) {
-                        info.name.set(StringRef(sname));
+                        info.name.assign(StringRef(sname));
                     }
                     if (const char* svend = ASensor_getVendor(s)) {
-                        info.vendor.set(StringRef(svend));
+                        info.vendor.assign(StringRef(svend));
                     } else {
-                        info.vendor.set_static("Android NDK");
+                        info.vendor.assign("Android NDK");
                     }
                     info.resolution = ASensor_getResolution(s);
                     info.min_delay_us = ASensor_getMinDelay(s);
@@ -326,7 +336,7 @@ bool SensorManager::is_using_simulator() const noexcept {
 }
 
 void SensorManager::update_frame(f64 dt_seconds) {
-    if (m_paused) return;
+    if (m_paused || !keel::is_finite(dt_seconds)) return;
 
     const f64 clamped_dt = keel::clamp(dt_seconds, 0.001, 0.1);
     if (is_using_simulator()) {
@@ -519,7 +529,7 @@ void SensorManager::step_simulator(f64 dt_seconds) {
     if (m_sim_config.animate_motion) {
         pitch_deg += 8.5f * keel::sin(t * 0.85f) + 2.0f * keel::cos(t * 2.1f);
         roll_deg  += 18.0f * keel::sin(t * 0.55f) + 3.5f * keel::sin(t * 1.4f);
-        yaw_deg    = keel::fmod(m_sim_config.manual_heading_deg + t * 6.0f + 360.0f, 360.0f);
+        yaw_deg    = wrap_deg_360(m_sim_config.manual_heading_deg + t * 6.0f);
     }
 
     m_snapshot.timestamp_ns = monotonic_ns();
@@ -531,7 +541,7 @@ void SensorManager::step_simulator(f64 dt_seconds) {
     m_snapshot.attitude.pitch_deg   = keel::clamp(pitch_deg - (m_has_attitude_tare ? m_pitch_tare_deg : 0.0f), -90.0f, 90.0f);
     m_snapshot.attitude.roll_deg    = roll_deg - (m_has_attitude_tare ? m_roll_tare_deg : 0.0f);
     m_snapshot.attitude.yaw_deg     = yaw_deg;
-    m_snapshot.attitude.heading_deg = keel::fmod(yaw_deg + 360.0f, 360.0f);
+    m_snapshot.attitude.heading_deg = wrap_deg_360(yaw_deg);
 
     const f32 pitch_rad = pitch_deg * kDegToRad;
     const f32 roll_rad  = roll_deg  * kDegToRad;
@@ -587,7 +597,7 @@ void SensorManager::step_simulator(f64 dt_seconds) {
     m_snapshot.ambient_light_lux = keel::max(1.0f, m_sim_config.sim_light_lux + 25.0f * keel::sin(t * 0.4f));
     m_snapshot.proximity_near = m_sim_config.sim_proximity_near;
     m_snapshot.proximity_cm = m_sim_config.sim_proximity_near ? 0.0f : 5.0f;
-    if (m_sim_config.animate_motion) {
+    if (m_sim_config.animate_motion && keel::is_finite(t) && t >= 0.0f) {
         m_snapshot.step_count = static_cast<u64>(t * 1.6f);
     }
 }
@@ -625,12 +635,28 @@ void SensorManager::reset_attitude_tare() noexcept {
 }
 
 f32 SensorManager::pressure_to_altitude_meters(f32 pressure_hpa, f32 sea_level_hpa) noexcept {
-    if (pressure_hpa <= 0.0f || sea_level_hpa <= 0.0f) return 0.0f;
+    if (!keel::is_finite(pressure_hpa) || !keel::is_finite(sea_level_hpa) ||
+        pressure_hpa <= 0.0f || sea_level_hpa <= 0.0f) {
+        return 0.0f;
+    }
     return 44330.0f * (1.0f - keel::pow(pressure_hpa / sea_level_hpa, 0.190294957f));
 }
 
 EulerAngles SensorManager::quaternion_to_euler(Quaternion q, AttitudeReference ref) noexcept {
     EulerAngles out{};
+    if (!keel::is_finite(q.w) || !keel::is_finite(q.x) ||
+        !keel::is_finite(q.y) || !keel::is_finite(q.z)) {
+        return out;
+    }
+    const f32 norm_sq = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z;
+    if (!(norm_sq > 0.0f)) {
+        return out;
+    }
+    const f32 inv_norm = 1.0f / keel::sqrt(norm_sq);
+    q.w *= inv_norm;
+    q.x *= inv_norm;
+    q.y *= inv_norm;
+    q.z *= inv_norm;
 
     const f32 ux = 2.0f * (q.x * q.z - q.w * q.y);
     const f32 uy = 2.0f * (q.y * q.z + q.w * q.x);
@@ -650,7 +676,7 @@ EulerAngles SensorManager::quaternion_to_euler(Quaternion q, AttitudeReference r
     const f32 x_east  = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
     const f32 x_north = 2.0f * (q.x * q.y + q.w * q.z);
     out.yaw_deg = keel::atan2(-x_north, x_east) * kRadToDeg;
-    out.heading_deg = keel::fmod(out.yaw_deg + 360.0f, 360.0f);
+    out.heading_deg = wrap_deg_360(out.yaw_deg);
 
     return out;
 }

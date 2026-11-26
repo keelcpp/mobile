@@ -62,6 +62,8 @@ void LocationService::shutdown() {
 }
 
 void LocationService::set_simulated_route_center(GeoCoord center) noexcept {
+    if (!keel::is_finite(center.lat) || !keel::is_finite(center.lon)) return;
+    center.lat = keel::clamp(center.lat, -90.0, 90.0);
     m_sim_center = center;
     m_track_history.clear();
     m_total_distance_meters = 0.0;
@@ -69,7 +71,7 @@ void LocationService::set_simulated_route_center(GeoCoord center) noexcept {
 }
 
 void LocationService::update_frame(f64 dt_seconds) {
-    if (!m_enabled) return;
+    if (!m_enabled || !keel::is_finite(dt_seconds)) return;
 
     const f64 clamped_dt = keel::clamp(dt_seconds, 0.001, 0.25);
     if (!poll_android_location()) {
@@ -221,6 +223,10 @@ void LocationService::append_track_point(GeoCoord pt) {
 }
 
 f64 LocationService::distance_meters(GeoCoord a, GeoCoord b) noexcept {
+    if (!keel::is_finite(a.lat) || !keel::is_finite(a.lon) ||
+        !keel::is_finite(b.lat) || !keel::is_finite(b.lon)) {
+        return 0.0;
+    }
     const f64 lat1 = a.lat * kDegToRad;
     const f64 lat2 = b.lat * kDegToRad;
     const f64 d_lat = (b.lat - a.lat) * kDegToRad;
@@ -228,11 +234,19 @@ f64 LocationService::distance_meters(GeoCoord a, GeoCoord b) noexcept {
 
     const f64 sin_lat = keel::sin(d_lat * 0.5);
     const f64 sin_lon = keel::sin(d_lon * 0.5);
-    const f64 h = sin_lat * sin_lat + keel::cos(lat1) * keel::cos(lat2) * sin_lon * sin_lon;
-    return 2.0 * kEarthRadiusMeters * keel::asin(keel::min(1.0, keel::sqrt(h)));
+    const f64 h = keel::clamp(
+        sin_lat * sin_lat + keel::cos(lat1) * keel::cos(lat2) * sin_lon * sin_lon,
+        0.0,
+        1.0
+    );
+    return 2.0 * kEarthRadiusMeters * keel::asin(keel::sqrt(h));
 }
 
 f32 LocationService::bearing_degrees(GeoCoord a, GeoCoord b) noexcept {
+    if (!keel::is_finite(a.lat) || !keel::is_finite(a.lon) ||
+        !keel::is_finite(b.lat) || !keel::is_finite(b.lon)) {
+        return 0.0f;
+    }
     const f64 lat1 = a.lat * kDegToRad;
     const f64 lat2 = b.lat * kDegToRad;
     const f64 d_lon = (b.lon - a.lon) * kDegToRad;
@@ -240,7 +254,9 @@ f32 LocationService::bearing_degrees(GeoCoord a, GeoCoord b) noexcept {
     const f64 y = keel::sin(d_lon) * keel::cos(lat2);
     const f64 x = keel::cos(lat1) * keel::sin(lat2) -
                   keel::sin(lat1) * keel::cos(lat2) * keel::cos(d_lon);
-    const f64 brg = keel::fmod(keel::atan2(y, x) * kRadToDeg + 360.0, 360.0);
+    f64 brg = keel::fmod(keel::atan2(y, x) * kRadToDeg, 360.0);
+    if (brg < 0.0) brg += 360.0;
+    if (brg >= 360.0) brg = 0.0;
     return static_cast<f32>(brg);
 }
 

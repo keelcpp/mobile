@@ -73,7 +73,7 @@ private:
     f64 m_track_sample_timer_sec = 0.0;
     bool m_initialized = false;
     bool m_enabled = true;
-    bool m_has_android_location = false;
+    [[maybe_unused]] bool m_has_android_location = false;
 };
 
 } // namespace keel

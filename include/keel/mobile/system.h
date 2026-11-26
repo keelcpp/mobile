@@ -54,7 +54,7 @@ public:
     [[nodiscard]] SafeAreaInsets safe_area_insets() const noexcept { return m_safe_area; }
     void set_safe_area_insets(SafeAreaInsets insets) noexcept { m_safe_area = insets; }
     [[nodiscard]] ScreenOrientation screen_orientation() const noexcept { return m_screen_orientation; }
-    void set_screen_orientation(ScreenOrientation orientation) noexcept { m_screen_orientation = orientation; }
+    void set_screen_orientation(ScreenOrientation orientation) noexcept;
     void set_simulate_mobile_cutout(bool enabled) noexcept;
     [[nodiscard]] bool is_simulating_mobile_cutout() const noexcept { return m_simulate_cutout; }
 

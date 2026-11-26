@@ -111,7 +111,7 @@ private:
     void close_android_camera();
 
     struct AndroidCameraState;
-    AndroidCameraState* m_android_cam = nullptr;
+    [[maybe_unused]] AndroidCameraState* m_android_cam = nullptr;
 
     SmallArray<CameraDeviceInfo, 4> m_devices{};
     usize m_active_device_index = 0;
@@ -136,7 +136,7 @@ private:
     f32 m_zoom_factor = 1.0f;
     u32 m_captured_photos = 0;
     f64 m_sim_time_sec = 0.0;
-    f64 m_retry_timer_sec = 0.0;
+    [[maybe_unused]] f64 m_retry_timer_sec = 0.0;
     f64 m_fps_accum_sec = 0.0;
     u32 m_fps_frame_count = 0;
 };

@@ -177,10 +177,90 @@ void test_system() {
 
     sys.set_simulate_mobile_cutout(true);
     CHECK(sys.safe_area_insets().top > 0.0f);
+    sys.set_screen_orientation(ScreenOrientation::LandscapeLeft);
+    CHECK_NEAR(sys.safe_area_insets().top, 0.0f, 0.001f);
+    CHECK(sys.safe_area_insets().left > 0.0f && sys.safe_area_insets().right > 0.0f);
     sys.set_simulate_mobile_cutout(false);
     CHECK_NEAR(sys.safe_area_insets().top, 0.0f, 0.001f);
+    CHECK_NEAR(sys.safe_area_insets().left, 0.0f, 0.001f);
 
+    sys.update_frame(keel::kNaN);
+    sys.update_frame(-1.0);
     sys.shutdown();
+}
+
+void test_hardening_edge_cases() {
+    const f32 nan_f32 = keel::kNaNF;
+    const f64 nan_f64 = keel::kNaN;
+
+    // Sensors: non-unit quaternion normalization, zero/NaN quaternion, negative heading wrap, NaN pressure
+    const Quaternion unnorm{2.0f, 0.0f, 0.0f, 0.0f};
+    const EulerAngles e_unnorm = SensorManager::quaternion_to_euler(unnorm, AttitudeReference::FlatTable);
+    CHECK_NEAR(e_unnorm.pitch_deg, 0.0f, 0.01f);
+    CHECK_NEAR(e_unnorm.roll_deg, 0.0f, 0.01f);
+    CHECK_NEAR(e_unnorm.heading_deg, 0.0f, 0.01f);
+
+    const EulerAngles e_zero = SensorManager::quaternion_to_euler({0.0f, 0.0f, 0.0f, 0.0f});
+    CHECK_NEAR(e_zero.pitch_deg, 0.0f, 0.01f);
+    const EulerAngles e_nan = SensorManager::quaternion_to_euler({nan_f32, 0.0f, 0.0f, 0.0f});
+    CHECK_NEAR(e_nan.pitch_deg, 0.0f, 0.01f);
+
+    CHECK_NEAR(SensorManager::pressure_to_altitude_meters(nan_f32, 1013.25f), 0.0f, 1e-6f);
+    CHECK_NEAR(SensorManager::pressure_to_altitude_meters(-10.0f, 1013.25f), 0.0f, 1e-6f);
+
+    SensorManager sm;
+    CHECK(sm.initialize());
+    sm.set_use_simulator_override(true);
+    sm.sim_config().manual_heading_deg = -400.0f;
+    sm.update_frame(0.016);
+    CHECK(sm.snapshot().attitude.heading_deg >= 0.0f && sm.snapshot().attitude.heading_deg < 360.0f);
+    sm.update_frame(nan_f64);
+    sm.shutdown();
+
+    // Location: NaN coords, antipodal points, negative bearing wrap
+    CHECK_NEAR(LocationService::distance_meters({nan_f64, 0.0}, {1.0, 0.0}), 0.0, 1e-9);
+    const f64 antipodal = LocationService::distance_meters({0.0, 0.0}, {0.0, 180.0});
+    CHECK_NEAR(antipodal, keel::kPi * 6371008.8, 1.0);
+    const f32 brg_west = LocationService::bearing_degrees({0.0, 0.0}, {0.0, -1.0});
+    CHECK_NEAR(brg_west, 270.0f, 0.5f);
+
+    LocationService loc;
+    CHECK(loc.initialize());
+    loc.set_simulated_route_center({nan_f64, nan_f64});
+    loc.update_frame(nan_f64);
+    loc.shutdown();
+
+    // Camera: NaN setters, oversized external RGB frame rejection (overflow guard)
+    CameraService cam;
+    CHECK(cam.initialize());
+    cam.trigger_tap_to_focus({nan_f32, nan_f32});
+    CHECK(keel::is_finite(cam.focus_point().x) && keel::is_finite(cam.focus_point().y));
+    cam.set_exposure_compensation_ev(nan_f32);
+    CHECK(keel::is_finite(cam.exposure_compensation_ev()));
+    cam.set_zoom_factor(nan_f32);
+    CHECK(keel::is_finite(cam.zoom_factor()));
+    u8 dummy_rgb[12]{};
+    cam.push_external_rgb_frame(ArrayRef<u8>(dummy_rgb, 12), 1000000u, 1000000u, 0);
+    CHECK(cam.frame_width() <= 1920u);
+    cam.update_frame(nan_f64);
+    cam.shutdown();
+
+    // Audio: NaN/negative dt, NaN hardware samples sanitized before FFT
+    AudioCapture audio;
+    CHECK(audio.initialize(48000));
+    audio.set_force_synthetic_signal(false);
+    Array<f32> clean_sine(1024, 0.0f);
+    for (usize i = 0; i < 1024; ++i) {
+        clean_sine[i] = 0.5f * keel::sin(2.0f * keel::as<f32>(keel::kPi) * 1500.0f * static_cast<f32>(i) / 48000.0f);
+    }
+    clean_sine[10] = nan_f32; // must be sanitized, not poison spectrum
+    audio.push_hardware_samples(clean_sine);
+    audio.update_frame(-1.0);
+    audio.update_frame(nan_f64);
+    CHECK(keel::is_finite(audio.rms_dbfs()));
+    CHECK(keel::is_finite(audio.peak_dbfs()));
+    CHECK_NEAR(audio.dominant_freq_hz(), 1500.0f, 50.0f);
+    audio.shutdown();
 }
 
 } // namespace
@@ -191,6 +271,7 @@ int main() {
     test_location();
     test_audio();
     test_system();
+    test_hardening_edge_cases();
 
     if (g_failures == 0) {
         keel::println("All keel_mobile tests passed.");

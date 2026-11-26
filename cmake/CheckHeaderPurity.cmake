@@ -1,7 +1,7 @@
 # Verifies that all public keel_mobile headers:
-# 1. Only contain `#include <cstddef>`, `#include <cstdint>`, or `#include <new>` as angle-bracket includes.
-# 2. When compiled standalone with `/showIncludes` (MSVC) or `-H` (Clang/GCC), do not transitively include
-#    any system header outside the exact baseline of `<cstddef> + <cstdint> + <new>`.
+# 1. Only contain `#include <cstddef>`, `#include <cstdint>`, `#include <initializer_list>`, or `#include <new>` as angle-bracket includes.
+# 2. When compiled standalone with `/showIncludes` (MSVC/clang-cl) or `-H` (Clang/GCC), do not transitively include
+#    any system header outside the exact baseline of `<cstddef> + <cstdint> + <initializer_list> + <new>`.
 
 if(NOT DEFINED KEEL_MOBILE_INCLUDE_DIR)
     message(FATAL_ERROR "KEEL_MOBILE_INCLUDE_DIR must be passed to CheckHeaderPurity.cmake")
@@ -12,7 +12,7 @@ file(GLOB_RECURSE KEEL_MOBILE_PUBLIC_HEADERS
     "${KEEL_MOBILE_INCLUDE_DIR}/keel/*.hpp"
 )
 
-set(ALLOWED_STD_HEADERS "cstddef" "cstdint" "new")
+set(ALLOWED_STD_HEADERS "cstddef" "cstdint" "initializer_list" "new")
 
 foreach(HDR IN LISTS KEEL_MOBILE_PUBLIC_HEADERS)
     get_filename_component(HDR_NAME "${HDR}" NAME)
@@ -20,7 +20,7 @@ foreach(HDR IN LISTS KEEL_MOBILE_PUBLIC_HEADERS)
     foreach(LINE IN LISTS INCLUDE_LINES)
         string(REGEX REPLACE "^[ \t]*#[ \t]*include[ \t]*<([^>]+)>.*$" "\\1" INC_NAME "${LINE}")
         if(NOT INC_NAME IN_LIST ALLOWED_STD_HEADERS)
-            message(FATAL_ERROR "Header purity violation in ${HDR_NAME}: forbidden '#include <${INC_NAME}>'. Only <cstddef>, <cstdint>, <new> are allowed.")
+            message(FATAL_ERROR "Header purity violation in ${HDR_NAME}: forbidden '#include <${INC_NAME}>'. Only <cstddef>, <cstdint>, <initializer_list>, <new> are allowed.")
         endif()
     endforeach()
 endforeach()
@@ -29,11 +29,16 @@ if(DEFINED COMPILER_PATH AND EXISTS "${COMPILER_PATH}")
     set(SCRATCH_DIR "${CMAKE_BINARY_DIR}/header_purity_check")
     file(MAKE_DIRECTORY "${SCRATCH_DIR}")
 
+    set(USE_MSVC_CLI FALSE)
+    if(COMPILER_ID MATCHES "MSVC" OR COMPILER_PATH MATCHES "clang-cl(\\.exe)?$")
+        set(USE_MSVC_CLI TRUE)
+    endif()
+
     set(SYS_INC_FLAGS "")
     if(DEFINED STD_INC_DIRS AND NOT STD_INC_DIRS STREQUAL "")
         string(REPLACE "|" ";" STD_INC_LIST "${STD_INC_DIRS}")
         foreach(SDIR IN LISTS STD_INC_LIST)
-            if(COMPILER_ID MATCHES "MSVC")
+            if(USE_MSVC_CLI)
                 list(APPEND SYS_INC_FLAGS "/I${SDIR}")
             else()
                 list(APPEND SYS_INC_FLAGS "-isystem" "${SDIR}")
@@ -41,7 +46,7 @@ if(DEFINED COMPILER_PATH AND EXISTS "${COMPILER_PATH}")
         endforeach()
     endif()
 
-    if(COMPILER_ID MATCHES "MSVC" AND "$ENV{INCLUDE}" STREQUAL "" AND SYS_INC_FLAGS STREQUAL "")
+    if(USE_MSVC_CLI AND "$ENV{INCLUDE}" STREQUAL "" AND SYS_INC_FLAGS STREQUAL "")
         get_filename_component(CL_DIR1 "${COMPILER_PATH}" DIRECTORY)
         get_filename_component(CL_DIR2 "${CL_DIR1}" DIRECTORY)
         get_filename_component(CL_DIR3 "${CL_DIR2}" DIRECTORY)
@@ -63,9 +68,9 @@ if(DEFINED COMPILER_PATH AND EXISTS "${COMPILER_PATH}")
     endif()
 
     set(BASELINE_SRC "${SCRATCH_DIR}/baseline.cpp")
-    file(WRITE "${BASELINE_SRC}" "#include <cstddef>\n#include <cstdint>\n#include <new>\nint main() { return 0; }\n")
+    file(WRITE "${BASELINE_SRC}" "#include <cstddef>\n#include <cstdint>\n#include <initializer_list>\n#include <new>\nint main() { return 0; }\n")
 
-    if(COMPILER_ID MATCHES "MSVC")
+    if(USE_MSVC_CLI)
         execute_process(
             COMMAND "${COMPILER_PATH}" /nologo /std:c++20 /Zs /showIncludes ${SYS_INC_FLAGS} "${BASELINE_SRC}"
             OUTPUT_VARIABLE BASELINE_OUT
@@ -91,7 +96,7 @@ if(DEFINED COMPILER_PATH AND EXISTS "${COMPILER_PATH}")
     string(REPLACE "\r\n" "\n" COMBINED_BASELINE "${COMBINED_BASELINE}")
     string(REPLACE "\n" ";" BASELINE_LINES "${COMBINED_BASELINE}")
     foreach(BLINE IN LISTS BASELINE_LINES)
-        if(COMPILER_ID MATCHES "MSVC")
+        if(USE_MSVC_CLI)
             if(BLINE MATCHES "Note: including file:[ \t]*(.+)$")
                 string(STRIP "${CMAKE_MATCH_1}" INC_PATH)
                 file(TO_CMAKE_PATH "${INC_PATH}" INC_PATH_NORM)
@@ -109,7 +114,7 @@ if(DEFINED COMPILER_PATH AND EXISTS "${COMPILER_PATH}")
 
     file(TO_CMAKE_PATH "${KEEL_MOBILE_INCLUDE_DIR}" KEEL_MOBILE_DIR_NORM)
     file(TO_CMAKE_PATH "${KEEL_CORE_INCLUDE_DIR}" KEEL_CORE_DIR_NORM)
-    if(COMPILER_ID MATCHES "MSVC")
+    if(USE_MSVC_CLI)
         string(TOLOWER "${KEEL_MOBILE_DIR_NORM}" KEEL_MOBILE_DIR_NORM)
         string(TOLOWER "${KEEL_CORE_DIR_NORM}" KEEL_CORE_DIR_NORM)
     endif()
@@ -120,7 +125,7 @@ if(DEFINED COMPILER_PATH AND EXISTS "${COMPILER_PATH}")
         set(TEST_SRC "${SCRATCH_DIR}/test_${SAFE_NAME}.cpp")
         file(WRITE "${TEST_SRC}" "#include \"${REL_HDR}\"\nint main() { return 0; }\n")
 
-        if(COMPILER_ID MATCHES "MSVC")
+        if(USE_MSVC_CLI)
             execute_process(
                 COMMAND "${COMPILER_PATH}" /nologo /std:c++20 /Zs /showIncludes "/I${KEEL_MOBILE_INCLUDE_DIR}" "/I${KEEL_CORE_INCLUDE_DIR}" ${SYS_INC_FLAGS} "${TEST_SRC}"
                 OUTPUT_VARIABLE HDR_OUT
@@ -146,7 +151,7 @@ if(DEFINED COMPILER_PATH AND EXISTS "${COMPILER_PATH}")
         string(REPLACE "\n" ";" HDR_LINES "${COMBINED_HDR}")
         foreach(HLINE IN LISTS HDR_LINES)
             set(FOUND_INC "")
-            if(COMPILER_ID MATCHES "MSVC")
+            if(USE_MSVC_CLI)
                 if(HLINE MATCHES "Note: including file:[ \t]*(.+)$")
                     string(STRIP "${CMAKE_MATCH_1}" FOUND_INC)
                     file(TO_CMAKE_PATH "${FOUND_INC}" FOUND_INC)

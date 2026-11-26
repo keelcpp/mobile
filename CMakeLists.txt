@@ -5,12 +5,24 @@ option(KEEL_MOBILE_NO_EXCEPTIONS_RTTI "Compile keel_mobile without C++ exception
 option(KEEL_MOBILE_BUILD_TESTS "Build keel_mobile unit tests and header purity checks" ${PROJECT_IS_TOP_LEVEL})
 
 if( NOT TARGET keel::keel )
+    if( KEEL_MOBILE_NO_EXCEPTIONS_RTTI )
+        set(KEEL_NO_EXCEPTIONS_RTTI ON CACHE BOOL "" FORCE)
+    endif()
     if( EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/keel/CMakeLists.txt" )
         add_subdirectory(third_party/keel EXCLUDE_FROM_ALL)
     elseif( EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../keel/CMakeLists.txt" )
         add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../keel" "${CMAKE_CURRENT_BINARY_DIR}/keel" EXCLUDE_FROM_ALL)
     else()
-        find_package(keel REQUIRED)
+        find_package(keel QUIET CONFIG)
+        if( NOT TARGET keel::keel )
+            include(FetchContent)
+            FetchContent_Declare(
+                keel
+                GIT_REPOSITORY https://github.com/keelcpp/keel.git
+                GIT_TAG        4b37783925fe7af7a64daaff90f268df267fbbf3
+            )
+            FetchContent_MakeAvailable(keel)
+        endif()
     endif()
 endif()
 

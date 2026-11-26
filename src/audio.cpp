@@ -45,7 +45,7 @@ struct ComplexF32 {
 
 // In-place radix-2 Cooley-Tukey FFT for real-time 1024-point spectrum computation.
 void radix2_fft(ComplexF32* a, usize n) noexcept {
-    if (n <= 1) return;
+    if (!a || n <= 1 || (n & (n - 1u)) != 0) return;
 
     for (usize i = 1, j = 0; i < n; ++i) {
         usize bit = n >> 1;
@@ -280,7 +280,7 @@ bool AudioCapture::poll_hardware_stream() {
 bool AudioCapture::initialize(u32 sample_rate) {
     if (m_initialized) return true;
 
-    m_sample_rate = sample_rate > 0 ? sample_rate : kDefaultSampleRate;
+    m_sample_rate = (sample_rate > 0) ? keel::clamp<u32>(sample_rate, 8000u, 192000u) : kDefaultSampleRate;
     m_waveform.clear();
     m_waveform.resize(kWaveformWindowSamples, 0.0f);
     m_spectrum_db.clear();
@@ -352,7 +352,8 @@ void AudioCapture::push_hardware_samples(ArrayRef<f32> samples) {
 void AudioCapture::update_frame(f64 dt_seconds) {
     if (!m_capturing) return;
 
-    m_sim_time_sec += dt_seconds;
+    const f64 safe_dt = keel::is_finite(dt_seconds) ? keel::clamp(dt_seconds, 0.0, 0.25) : 0.0;
+    m_sim_time_sec += safe_dt;
 
     if (!m_got_external_samples_this_frame) {
         poll_hardware_stream();
@@ -360,18 +361,22 @@ void AudioCapture::update_frame(f64 dt_seconds) {
 
     if (!m_got_external_samples_this_frame && (m_using_synthetic || m_force_synthetic)) {
         m_using_synthetic = true;
-        const usize new_samples = keel::clamp<usize>(
-            static_cast<usize>(keel::round(dt_seconds * m_sample_rate)),
-            128,
-            1024
-        );
+        if (m_waveform.size() < kWaveformWindowSamples) {
+            m_waveform.resize(kWaveformWindowSamples, 0.0f);
+        }
+        const f64 desired = keel::clamp(keel::round(safe_dt * static_cast<f64>(m_sample_rate)), 128.0, 1024.0);
+        const usize new_samples = keel::min<usize>(static_cast<usize>(desired), m_waveform.size());
         const usize keep = m_waveform.size() - new_samples;
-        mem_move(m_waveform.data(), m_waveform.data() + new_samples, keep * sizeof(f32));
+        if (keep > 0) {
+            mem_move(m_waveform.data(), m_waveform.data() + new_samples, keep * sizeof(f32));
+        }
 
         const f64 two_pi = 2.0 * keel::kPi;
-        const f64 f0 = keel::clamp(static_cast<f64>(m_synth_freq_hz), 60.0, 18000.0);
+        const f64 raw_f0 = keel::is_finite(m_synth_freq_hz) ? static_cast<f64>(m_synth_freq_hz) : 1000.0;
+        const f64 f0 = keel::clamp(raw_f0, 60.0, 18000.0);
         const f64 phase_step = two_pi * f0 / static_cast<f64>(m_sample_rate);
-        const f32 noise_amp = keel::pow(10.0f, m_synth_noise_db / 20.0f);
+        const f32 safe_noise_db = keel::is_finite(m_synth_noise_db) ? keel::clamp(m_synth_noise_db, -120.0f, 0.0f) : -52.0f;
+        const f32 noise_amp = keel::pow(10.0f, safe_noise_db / 20.0f);
         const f32 am_mod = 0.65f + 0.25f * keel::sin(static_cast<f32>(m_sim_time_sec * 2.2));
 
         u32 rng = static_cast<u32>(m_slice_sequence * 1664525u + 1013904223u);
@@ -404,7 +409,8 @@ void AudioCapture::compute_metrics_and_spectrum() {
     ComplexF32 fft_buf[kFftSize]{};
 
     for (usize i = 0; i < kFftSize; ++i) {
-        const f32 s = window_start[i];
+        const f32 raw_s = window_start[i];
+        const f32 s = keel::is_finite(raw_s) ? raw_s : 0.0f;
         sum_sq += static_cast<f64>(s) * s;
         peak = keel::max(peak, keel::abs(s));
 
